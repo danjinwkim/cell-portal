@@ -122,12 +122,36 @@ async function uploadH5ad(file) {
     const parsed = await response.json();
     loadParsedDataset(parsed, file.name);
   } catch (error) {
-    $("analysisStatus").textContent = "H5AD backend unavailable";
-    addChat(
-      "assistant",
-      `I can accept .h5ad files when the Python backend is running. Start it with the README instructions, then try again. Details: ${error.message}`
-    );
+    const message = explainH5adUploadError(error);
+    $("analysisStatus").textContent = message.status;
+    addChat("assistant", message.text);
   }
+}
+
+function explainH5adUploadError(error) {
+  const detail = String(error?.message || "");
+  if (/no tunnel here/i.test(detail)) {
+    return {
+      status: "Tunnel expired",
+      text:
+        "That H5AD request went to an expired temporary tunnel, so the upload never reached Cell Portal. " +
+        "Use the permanent Render URL or the current localhost page, not an old lhr.life/loca.lt tunnel link.",
+    };
+  }
+  if (location.hostname.endsWith("onrender.com")) {
+    return {
+      status: "Hosted H5AD upload failed",
+      text:
+        "The Render free deployment is live, but it has no persistent dataset disk and large H5AD uploads may exceed free-tier limits. " +
+        `For full H5AD datasets, use the local app or a paid Render/VPS deployment with datasets mounted on the server. Details: ${detail}`,
+    };
+  }
+  return {
+    status: "H5AD backend unavailable",
+    text:
+      "I can accept .h5ad files when the Python backend is running. Start it with the README instructions, then try again. " +
+      `Details: ${detail}`,
+  };
 }
 
 async function refreshServerDatasets() {
