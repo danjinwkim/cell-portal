@@ -1,0 +1,10 @@
+.venv
+__pycache__
+*.pyc
+.DS_Store
+.git
+.gitignore
+
+# Keep the Docker image small. Mount or copy full H5AD datasets onto the host
+# at DATASETS_DIR instead of baking multi-GB files into the image.
+datasets/*.h5ad

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: cell-portal
+    env: docker
+    plan: standard
+    healthCheckPath: /api/health
+    disk:
+      name: cell-portal-datasets
+      mountPath: /app/datasets
+      sizeGB: 10
+    envVars:
+      - key: DATASETS_DIR
+        value: /app/datasets
+      - key: WORMBASE_CACHE_DIR
+        value: /app/cache/wormbase
+      - key: MAX_BROWSER_CELLS
+        value: "3000"
+      - key: MAX_BROWSER_GENES
+        value: "250"

@@ -1,0 +1,11 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Large local data files should live on the hosting disk, not in Git.
+datasets/*.h5ad
+
+# Keep cached API responses local unless you intentionally want to seed them.
+cache/

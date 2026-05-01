@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cell Portal</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">CP</div>
+          <div>
+            <h1>Cell Portal</h1>
+            <p>Single-cell RNA-seq explorer</p>
+          </div>
+        </div>
+
+        <section class="panel upload-panel">
+          <h2>Dataset</h2>
+          <label class="drop-zone" for="datasetFile">
+            <span class="drop-icon">+</span>
+            <strong>Upload CSV, TSV, or H5AD</strong>
+            <small>CSV/TSV: genes as rows, cell types as columns. H5AD uses the backend.</small>
+          </label>
+          <input id="datasetFile" type="file" accept=".csv,.tsv,.txt,.h5ad" />
+          <label>
+            Downloaded datasets
+            <select id="serverDataset"></select>
+          </label>
+          <button id="loadServerDataset" class="secondary-btn" type="button">Load downloaded H5AD</button>
+          <button id="loadExample" class="secondary-btn" type="button">Load example dataset</button>
+        </section>
+
+        <section class="panel controls-panel">
+          <h2>Analysis</h2>
+          <label>
+            Cell id column
+            <select id="cellIdColumn"></select>
+          </label>
+          <label>
+            Group column
+            <select id="groupColumn"></select>
+          </label>
+          <label>
+            Color by
+            <select id="colorBy"></select>
+          </label>
+          <label>
+            Gene overlay
+            <select id="geneOverlay"></select>
+          </label>
+          <button id="runAnalysis" class="primary-btn" type="button">Run analysis</button>
+        </section>
+      </aside>
+
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Interactive analysis</p>
+            <h2 id="datasetTitle">No dataset loaded</h2>
+          </div>
+          <div class="status-pill" id="analysisStatus">Waiting for data</div>
+        </header>
+
+        <section class="metrics-grid" aria-label="Dataset metrics">
+          <article class="metric">
+            <span>Cells</span>
+            <strong id="metricCells">0</strong>
+          </article>
+          <article class="metric">
+            <span>Genes</span>
+            <strong id="metricGenes">0</strong>
+          </article>
+          <article class="metric">
+            <span>Median UMIs</span>
+            <strong id="metricUmis">0</strong>
+          </article>
+          <article class="metric">
+            <span>Clusters</span>
+            <strong id="metricClusters">0</strong>
+          </article>
+        </section>
+
+        <section class="main-grid">
+          <article class="plot-surface">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Embedding</p>
+                <h3>PCA projection</h3>
+              </div>
+              <div class="legend" id="plotLegend"></div>
+            </div>
+            <div id="pcaPlot" class="plotly-surface" role="img" aria-label="Interactive PCA projection"></div>
+            <section class="cell-detail" id="cellDetail">
+              <div class="section-header">
+                <div>
+                  <p class="eyebrow">Selected cell</p>
+                  <h3 id="selectedCellTitle">Click a point</h3>
+                </div>
+              </div>
+              <dl class="cell-facts">
+                <div><dt>Cluster</dt><dd id="selectedCellCluster">-</dd></div>
+                <div><dt>Cell type</dt><dd id="selectedCellType">-</dd></div>
+                <div><dt>PC1 / PC2</dt><dd id="selectedCellCoords">-</dd></div>
+                <div><dt>Top genes</dt><dd id="selectedCellGenes">-</dd></div>
+              </dl>
+              <p id="selectedCellBio">Select a cell to see its biological interpretation and why it occupies this PCA region.</p>
+            </section>
+          </article>
+
+          <article class="panel chat-panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Natural language</p>
+                <h3>Ask the dataset</h3>
+              </div>
+            </div>
+            <div id="chatLog" class="chat-log"></div>
+            <form id="chatForm" class="chat-form">
+              <input
+                id="chatInput"
+                type="text"
+                placeholder="Try: describe daf-2 or which cells express CD3D?"
+                autocomplete="off"
+              />
+              <button type="submit" class="primary-btn">Ask</button>
+            </form>
+          </article>
+        </section>
+
+        <section class="tables-grid">
+          <article class="panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Markers</p>
+                <h3>Top genes by cluster</h3>
+              </div>
+              <select id="markerCluster"></select>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Gene</th>
+                    <th>Cluster avg</th>
+                    <th>Other avg</th>
+                    <th>Log2 fold</th>
+                  </tr>
+                </thead>
+                <tbody id="markerTable"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="section-header">
+              <div>
+                <p class="eyebrow">Differential expression</p>
+                <h3>Group comparison</h3>
+              </div>
+              <div class="inline-selects">
+                <select id="groupA"></select>
+                <select id="groupB"></select>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Gene</th>
+                    <th>A avg</th>
+                    <th>B avg</th>
+                    <th>Log2 fold</th>
+                  </tr>
+                </thead>
+                <tbody id="deTable"></tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="vendor/plotly-2.35.2.min.js"></script>
+    <script src="app.js?v=11"></script>
+  </body>
+</html>
