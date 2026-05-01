@@ -18,7 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY server.py index.html app.js styles.css README.md ./
 COPY vendor ./vendor
-COPY cache ./cache
 
 RUN mkdir -p /app/datasets /app/cache/wormbase
 
