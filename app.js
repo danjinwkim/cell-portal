@@ -15,6 +15,8 @@ const state = {
   activeView: "pca",
   globalClustering: null,
   globalHighlightIndices: new Set(),
+  multimodalNeurons: [],
+  multimodalHighlightIds: new Set(),
   markers: new Map(),
 };
 
@@ -39,6 +41,8 @@ const controls = {
   globalMetric: $("globalMetric"),
   globalLinkage: $("globalLinkage"),
   runGlobalClustering: $("runGlobalClustering"),
+  multimodalForm: $("multimodalForm"),
+  multimodalInput: $("multimodalInput"),
   markerCluster: $("markerCluster"),
   groupA: $("groupA"),
   groupB: $("groupB"),
@@ -78,6 +82,10 @@ controls.globalTab.addEventListener("click", () => setActiveView("global"));
 controls.globalMetric.addEventListener("change", runGlobalClustering);
 controls.globalLinkage.addEventListener("change", runGlobalClustering);
 controls.runGlobalClustering.addEventListener("click", runGlobalClustering);
+controls.multimodalForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  await runMultimodalQuery(controls.multimodalInput.value.trim());
+});
 
 controls.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -526,12 +534,18 @@ async function renderPlot() {
       showscale: useGene,
       colorbar: useGene ? { title: gene, thickness: 12 } : undefined,
       line: {
-        color: hasGlobalHighlight
-          ? state.rows.map((_, index) => (state.globalHighlightIndices.has(index) ? "#111827" : "rgba(29,39,51,0.18)"))
+        color: hasGlobalHighlight || state.multimodalHighlightIds.size
+          ? state.rows.map((row, index) => (state.globalHighlightIndices.has(index) || state.multimodalHighlightIds.has(normalizeNeuronId(cellLabel(row))) ? "#111827" : "rgba(29,39,51,0.18)"))
           : "rgba(29,39,51,0.25)",
-        width: hasGlobalHighlight ? state.rows.map((_, index) => (state.globalHighlightIndices.has(index) ? 2 : 0.4)) : 0.5,
+        width:
+          hasGlobalHighlight || state.multimodalHighlightIds.size
+            ? state.rows.map((row, index) => (state.globalHighlightIndices.has(index) || state.multimodalHighlightIds.has(normalizeNeuronId(cellLabel(row))) ? 2 : 0.4))
+            : 0.5,
       },
-      opacity: hasGlobalHighlight ? state.rows.map((_, index) => (state.globalHighlightIndices.has(index) ? 0.98 : 0.2)) : 0.86,
+      opacity:
+        hasGlobalHighlight || state.multimodalHighlightIds.size
+          ? state.rows.map((row, index) => (state.globalHighlightIndices.has(index) || state.multimodalHighlightIds.has(normalizeNeuronId(cellLabel(row))) ? 0.98 : 0.2))
+          : 0.86,
       size: state.rows.length > 1000 ? 5 : 9,
     },
   };
@@ -764,6 +778,174 @@ function highlightGlobalCluster(clusterId) {
   state.globalHighlightIndices = new Set(selected);
   $("globalStatus").textContent = `Highlighted cluster ${clusterId} (${selected.length} profiles)`;
   schedulePlotRender();
+}
+
+async function loadMultimodalIndex() {
+  try {
+    const response = await fetch("/api/multimodal/neurons");
+    if (!response.ok) throw new Error("Multimodal API unavailable");
+    state.multimodalNeurons = await response.json();
+    renderMultimodalViews(state.multimodalNeurons.slice(0, 6).map((item) => item.neuron_id));
+    $("multimodalSummary").textContent = `${state.multimodalNeurons.length} multimodal neuron records indexed`;
+  } catch (error) {
+    $("multimodalSummary").textContent = `Multimodal index unavailable: ${error.message}`;
+  }
+}
+
+async function runMultimodalQuery(query) {
+  if (!query) return;
+  $("multimodalSummary").textContent = "Running multimodal query";
+  try {
+    const response = await fetch("/api/multimodal/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const result = await response.json();
+    state.multimodalHighlightIds = new Set(result.highlighted_neurons.map(normalizeNeuronId));
+    $("multimodalSummary").textContent = `${result.kind.replaceAll("_", " ")}: ${result.highlighted_neurons.length} highlighted neurons`;
+    renderMultimodalResults(result);
+    renderMultimodalViews(result.highlighted_neurons);
+    schedulePlotRender();
+  } catch (error) {
+    $("multimodalSummary").textContent = `Query failed: ${error.message}`;
+  }
+}
+
+function renderMultimodalResults(result) {
+  const container = $("multimodalResults");
+  const rows = Array.isArray(result.result) ? result.result : [result.result];
+  container.innerHTML = rows
+    .slice(0, 12)
+    .map((item) => {
+      const label = item.neuron_id || item.source || item.target || result.kind;
+      const detail = Object.entries(item)
+        .filter(([key]) => key !== "neighbors")
+        .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(" > ") : value}`)
+        .join(" | ");
+      return `<div class="result-row"><div><strong>${label}</strong>${detail}</div></div>`;
+    })
+    .join("");
+}
+
+function renderMultimodalViews(highlightedIds = []) {
+  const highlighted = new Set(highlightedIds.map(normalizeNeuronId));
+  const neurons = state.multimodalNeurons;
+  if (!neurons.length || !window.Plotly) return;
+  renderConnectomeGraph(neurons, highlighted);
+  renderSpatialMap(neurons, highlighted);
+  renderLineageTree(neurons, highlighted);
+}
+
+function renderConnectomeGraph(neurons, highlighted) {
+  const ids = neurons.map((item) => item.neuron_id);
+  const positions = new Map(ids.map((id, index) => [id, circularPoint(index, ids.length, 1)]));
+  const edgeX = [];
+  const edgeY = [];
+  neurons.forEach((source) => {
+    const start = positions.get(source.neuron_id);
+    source.connectome_edges.forEach((edge) => {
+      const end = positions.get(edge.target);
+      if (!start || !end) return;
+      edgeX.push(start.x, end.x, null);
+      edgeY.push(start.y, end.y, null);
+    });
+  });
+  const nodeTrace = {
+    type: "scatter",
+    mode: "markers+text",
+    x: ids.map((id) => positions.get(id).x),
+    y: ids.map((id) => positions.get(id).y),
+    text: ids,
+    textposition: "top center",
+    marker: {
+      color: ids.map((id) => (highlighted.has(id) ? "#ba4a68" : "#1f7a8c")),
+      size: ids.map((id) => (highlighted.has(id) ? 16 : 10)),
+      line: { color: "#ffffff", width: 1 },
+    },
+    hovertemplate: "%{text}<extra>connectome</extra>",
+  };
+  Plotly.react(
+    $("connectomeGraph"),
+    [{ type: "scatter", mode: "lines", x: edgeX, y: edgeY, line: { color: "#c6d0d7", width: 1 }, hoverinfo: "skip" }, nodeTrace],
+    multimodalLayout("Connectome"),
+    { responsive: true, displaylogo: false }
+  );
+}
+
+function renderSpatialMap(neurons, highlighted) {
+  Plotly.react(
+    $("spatialMap"),
+    [
+      {
+        type: "scatter",
+        mode: "markers+text",
+        x: neurons.map((item) => item.spatial_coordinates.x),
+        y: neurons.map((item) => item.spatial_coordinates.y),
+        text: neurons.map((item) => item.neuron_id),
+        textposition: "top center",
+        marker: {
+          color: neurons.map((item) => (highlighted.has(item.neuron_id) ? "#ba4a68" : "#4d8d62")),
+          size: neurons.map((item) => (highlighted.has(item.neuron_id) ? 15 : 9)),
+        },
+        hovertemplate: "%{text}<br>x=%{x:.1f}<br>y=%{y:.1f}<extra>spatial</extra>",
+      },
+    ],
+    multimodalLayout("Spatial map"),
+    { responsive: true, displaylogo: false }
+  );
+}
+
+function renderLineageTree(neurons, highlighted) {
+  const x = [];
+  const y = [];
+  const text = [];
+  neurons.forEach((item, index) => {
+    x.push(item.lineage_path.length);
+    y.push(index);
+    text.push(item.neuron_id);
+  });
+  Plotly.react(
+    $("lineageTree"),
+    [
+      {
+        type: "scatter",
+        mode: "markers+text",
+        x,
+        y,
+        text,
+        textposition: "middle right",
+        marker: {
+          color: text.map((id) => (highlighted.has(id) ? "#ba4a68" : "#d88742")),
+          size: text.map((id) => (highlighted.has(id) ? 15 : 9)),
+        },
+        hovertemplate: "%{text}<br>lineage depth=%{x}<extra>lineage</extra>",
+      },
+    ],
+    multimodalLayout("Lineage depth"),
+    { responsive: true, displaylogo: false }
+  );
+}
+
+function multimodalLayout(title) {
+  return {
+    title: { text: title, font: { size: 13 } },
+    margin: { l: 28, r: 16, t: 34, b: 28 },
+    paper_bgcolor: "#fbfcfc",
+    plot_bgcolor: "#fbfcfc",
+    xaxis: { zeroline: false, showgrid: false },
+    yaxis: { zeroline: false, showgrid: false, showticklabels: false },
+  };
+}
+
+function circularPoint(index, total, radius) {
+  const angle = (index / Math.max(1, total)) * Math.PI * 2;
+  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+}
+
+function normalizeNeuronId(value) {
+  return String(value || "").trim().toUpperCase();
 }
 
 function renderSelectedCell(index) {
@@ -1115,3 +1297,4 @@ function makeExampleDataset() {
 
 schedulePlotRender();
 refreshServerDatasets();
+loadMultimodalIndex();

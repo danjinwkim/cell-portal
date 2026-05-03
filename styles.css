@@ -487,6 +487,53 @@ input[type="text"] {
   gap: 18px;
 }
 
+.multimodal-panel {
+  grid-column: 1 / -1;
+}
+
+.multimodal-form {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.multimodal-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.mini-plot {
+  min-height: 260px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.result-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.result-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f8fbfb;
+  padding: 10px 12px;
+}
+
+.result-row strong {
+  margin-right: 8px;
+}
+
 .table-wrap {
   overflow: auto;
   max-height: 360px;
@@ -528,7 +575,8 @@ th {
   .app-shell,
   .main-grid,
   .tables-grid,
-  .global-grid {
+  .global-grid,
+  .multimodal-grid {
     grid-template-columns: 1fr;
   }
 

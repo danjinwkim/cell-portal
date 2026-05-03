@@ -14,6 +14,7 @@ A local prototype web portal for single-cell RNA-seq exploration with natural-la
 - Lets users color the interactive Plotly PCA projection by metadata, cluster, or gene expression.
 - PCA points are hoverable and clickable; selecting a point shows cell ID, cluster, cell type, top expressed genes, PC1/PC2 coordinates, and a biological interpretation.
 - Adds a **Global Clustering** tab with a pairwise transcriptomic similarity heatmap, top dendrogram, neuron-class block annotations, Pearson/cosine similarity options, and linked cluster highlighting back to the PCA view.
+- Adds a multimodal neuron query panel that links transcriptomics to connectome edges, 2D/3D spatial coordinates, and developmental lineage records by `neuron_id`.
 - Includes a natural-language query box for common analysis tasks:
   - `show marker genes for cluster 2`
   - `plot MS4A1 expression`
@@ -112,6 +113,38 @@ Health check endpoint:
 The backend uses backed AnnData reading for H5AD uploads, then returns up to 3,000 cells and 250 selected genes by default. It prioritizes common interpretable marker genes and any `highly_variable` gene annotations. If the file already contains `X_umap`, `X_tsne`, `X_pca`, `leiden`, `louvain`, `cell_type`, or related annotations, the portal reuses them instead of recomputing everything in the browser.
 
 The Global Clustering view posts the already-loaded browser expression view to `/api/global-clustering`; the backend normalizes expression, computes a Pearson or cosine similarity matrix, runs SciPy hierarchical clustering, caches the result by dataset/settings, and returns Plotly-ready dendrogram and heatmap data.
+
+## Multimodal data integration
+
+The backend module `multimodal_store.py` defines the unified schema:
+
+```text
+neuron_id
+cluster
+transcriptomic_neighbors
+connectome_edges: [{target, chemical_weight, gap_weight}]
+spatial_coordinates: {x, y, z}
+lineage_path
+parent_cell
+```
+
+Optional ingestion files can be added under `multimodal_data/`:
+
+- `neurons.csv`: `neuron_id,neuron_class,cluster`
+- `connectome_edges.csv`: `source,target,chemical_weight,gap_weight`
+- `spatial_coordinates.csv`: `neuron_id,x,y,z`
+- `lineage.json`: records with `neuron_id`, `parent_cell`, and `lineage_path`
+
+If those files are absent, the app uses a small built-in adult neuron demo index so the API and UI remain usable. API endpoints:
+
+- `GET /api/multimodal/neurons`
+- `GET /api/multimodal/neuron/{neuron_id}`
+- `GET /api/multimodal/connectivity/{neuron_id}`
+- `GET /api/multimodal/spatial/nearest/{neuron_id}`
+- `GET /api/multimodal/lineage/{neuron_id}`
+- `POST /api/multimodal/query`
+
+The natural-language query engine is intentionally deterministic in this prototype: it extracts neuron IDs and maps terms such as `synaptic`, `connected`, `near`, `lineage`, and `transcriptionally similar` to the structured endpoints above. This can later be replaced by LLM function calling while preserving the same API tools.
 
 ## Downloaded datasets
 

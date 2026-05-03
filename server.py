@@ -20,6 +20,8 @@ from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 from scipy.spatial.distance import squareform
 from scipy import sparse
 
+from multimodal_store import STORE
+
 
 ROOT = Path(__file__).parent
 DATASETS_DIR = Path(os.environ.get("DATASETS_DIR", ROOT / "datasets"))
@@ -147,6 +149,42 @@ async def wormbase_gene(gene_name: str, gene_id: Optional[str] = None) -> dict[s
         return wormbase_summary(gene_name, resolved_id)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"WormBase lookup failed: {exc}") from exc
+
+
+@app.get("/api/multimodal/neurons")
+async def multimodal_neurons() -> list[dict[str, Any]]:
+    return STORE.all_neurons()
+
+
+@app.get("/api/multimodal/neuron/{neuron_id}")
+async def multimodal_neuron(neuron_id: str) -> dict[str, Any]:
+    record = STORE.get_neuron(neuron_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Neuron not found in multimodal index.")
+    return record
+
+
+@app.get("/api/multimodal/connectivity/{neuron_id}")
+async def multimodal_connectivity(neuron_id: str, min_weight: float = 0.0) -> dict[str, Any]:
+    return STORE.connectivity(neuron_id, min_weight=min_weight)
+
+
+@app.get("/api/multimodal/spatial/nearest/{neuron_id}")
+async def multimodal_spatial_nearest(neuron_id: str, limit: int = 8) -> dict[str, Any]:
+    return STORE.nearest(neuron_id, limit=max(1, min(limit, 50)))
+
+
+@app.get("/api/multimodal/lineage/{neuron_id}")
+async def multimodal_lineage(neuron_id: str) -> dict[str, Any]:
+    return STORE.lineage(neuron_id)
+
+
+@app.post("/api/multimodal/query")
+async def multimodal_query(payload: dict[str, Any]) -> dict[str, Any]:
+    query = str(payload.get("query") or "")
+    if not query.strip():
+        raise HTTPException(status_code=400, detail="Query text is required.")
+    return STORE.natural_language_query(query)
 
 
 @app.post("/api/global-clustering")
