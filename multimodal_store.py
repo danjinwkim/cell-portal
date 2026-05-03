@@ -116,11 +116,12 @@ class MultimodalStore:
             rows = self.transcriptionally_similar_and_connected()
             highlighted = sorted({item["source"] for item in rows} | {item["target"] for item in rows})
             return response("transcriptomic_connectome_overlap", rows, highlighted)
-        if ("near" in query or "spatial" in query or "position" in query) and ("synap" in query or "connect" in query):
+        spatial_terms = ("near", "close", "proximal", "spatial", "position", "coordinate", "distance")
+        if any(term in query for term in spatial_terms) and ("synap" in query or "connect" in query):
             result = self.nearby_connected(anchor or "AVA")
             highlighted = [anchor or "AVA", *[item["neuron_id"] for item in result]]
             return response("spatial_connectivity", result, highlighted)
-        if "near" in query or "spatial" in query or "position" in query:
+        if any(term in query for term in spatial_terms):
             result = self.nearest(anchor or "AVA")
             return response("spatial_nearest", result["neighbors"], [anchor] + [item["neuron_id"] for item in result["neighbors"]])
         if "lineage" in query or "ancestor" in query or "descendant" in query:

@@ -1037,60 +1037,138 @@ function renderDifferentialTable() {
 }
 
 async function answerQuestion(message) {
-  const query = message.toLowerCase();
-  if (isMultimodalQuestion(query)) {
-    return await answerMultimodalQuestion(message);
-  }
-  if (!state.rows.length) return "Upload or load a dataset first, then I can query it.";
-  const cluster = clusterLabels().find((label) => query.includes(label.toLowerCase())) || matchClusterNumber(query);
+  const intent = analyzeQuery(message);
+  const ambiguity = ambiguityNote(intent);
+  const response = await executeQueryIntent(intent, message);
+  return ambiguity ? `${ambiguity} ${response}` : response;
+}
+
+function isMultimodalQuestion(query) {
+  const intent = analyzeQuery(query);
+  return intent.modalities.some((modality) => ["connectome", "spatial", "lineage", "multimodal"].includes(modality.name));
+}
+
+function analyzeQuery(message) {
+  const normalized = normalizeName(message);
+  const tokens = new Set(normalized.split(/\s+/).filter(Boolean));
   const genes = extractGenes(message);
-  const gene = genes[0];
+  const neurons = extractNeuronEntities(message);
+  const cluster = clusterLabels().find((label) => normalized.includes(normalizeName(label))) || matchClusterNumber(normalized);
+  const modalities = scoreSemanticDimensions(tokens, normalized, {
+    transcriptomics: ["transcript", "expression", "express", "gene", "marker", "cluster", "pca", "umap", "similar"],
+    connectome: ["connectome", "synapse", "synaptic", "partner", "edge", "weight", "gap", "junction", "connected", "neighbor"],
+    spatial: ["spatial", "anatomy", "anatomical", "near", "nearest", "close", "proximal", "coordinate", "position", "location", "distance", "region"],
+    lineage: ["lineage", "ancestor", "descendant", "parent", "development", "developmental", "tree"],
+    annotation: ["describe", "annotation", "homology", "ortholog", "disease", "phenotype", "pathway", "wormbase", "interact"],
+  });
+  const operations = scoreSemanticDimensions(tokens, normalized, {
+    rank: ["highest", "top", "max", "most", "strongest", "enriched", "rank"],
+    compare: ["compare", "versus", "vs", "different", "differential", "between"],
+    visualize: ["show", "plot", "color", "highlight", "display", "map"],
+    summarize: ["summary", "summarize", "summarise", "overview", "many", "count", "size", "describe"],
+    retrieve: ["find", "which", "what", "where", "who", "list", "near"],
+    annotate: ["describe", "annotation", "homology", "ortholog", "disease", "phenotype", "pathway", "wormbase"],
+  });
+  const relationCount = modalities.filter((item) => item.score > 0).length;
+  if (relationCount > 1) modalities.unshift({ name: "multimodal", score: relationCount });
+  return {
+    raw: message,
+    normalized,
+    genes,
+    neurons,
+    cluster,
+    limit: parseResultLimit(normalized),
+    modalities: modalities.filter((item) => item.score > 0).sort((a, b) => b.score - a.score),
+    operations: operations.filter((item) => item.score > 0).sort((a, b) => b.score - a.score),
+  };
+}
 
-  if (isGeneInfoQuestion(query)) {
+function scoreSemanticDimensions(tokens, normalized, dimensions) {
+  return Object.entries(dimensions).map(([name, words]) => {
+    const score = words.reduce((sum, word) => {
+      const normalizedWord = normalizeName(word);
+      const tokenHit = tokens.has(normalizedWord);
+      const stemHit = [...tokens].some((token) => token.startsWith(normalizedWord) || normalizedWord.startsWith(token));
+      const phraseHit = normalized.includes(normalizedWord);
+      return sum + (tokenHit ? 2 : 0) + (!tokenHit && stemHit ? 1 : 0) + (!tokenHit && phraseHit ? 1 : 0);
+    }, 0);
+    return { name, score };
+  });
+}
+
+async function executeQueryIntent(intent, message) {
+  if (shouldUseMultimodalEngine(intent)) return await answerMultimodalQuestion(message);
+  if (!state.rows.length) return "Upload or load a dataset first, then I can query transcriptomic values from it. I can still answer connectome, spatial, or lineage questions from the multimodal index.";
+
+  const topOperation = intent.operations[0]?.name || "retrieve";
+  const topModality = intent.modalities[0]?.name || "transcriptomics";
+  const gene = intent.genes[0];
+
+  if (topModality === "annotation" || (topOperation === "annotate" && (gene || extractGeneLikeToken(message)))) {
     const targetGene = gene || extractGeneLikeToken(message);
-    if (!targetGene) return "Tell me which C. elegans gene you want WormBase information for, for example: describe daf-2.";
-    return await answerWormBaseQuestion(targetGene, query);
+    if (!targetGene) return "I interpret this as a gene annotation question, but I need a gene symbol or WormBase ID to answer it.";
+    return await answerWormBaseQuestion(targetGene, intent.normalized);
   }
-
-  if (/(highest|high|most|top|max|maximum|enriched|strongest).*(express|expression)|which .*express|express.*highest/.test(query) && genes.length) {
-    return answerHighestExpression(genes, parseResultLimit(query));
-  }
-
-  if (/marker|top gene|signature/.test(query)) {
-    const label = cluster || controls.markerCluster.value || clusterLabels()[0];
-    controls.markerCluster.value = label;
-    renderMarkerTable();
-    const markers = (state.markers.get(label) || []).slice(0, 5).map((row) => row.gene).join(", ");
-    return `Top marker genes for ${label}: ${markers}. I also updated the marker table.`;
-  }
-
-  if (/express|expression|show|plot|color/.test(query) && gene) {
+  if (topOperation === "rank" && intent.genes.length) return answerHighestExpression(intent.genes, intent.limit);
+  if ((topOperation === "visualize" || topModality === "transcriptomics") && gene && /express|gene|plot|show|color|display/.test(intent.normalized)) {
     controls.geneOverlay.value = gene;
     schedulePlotRender();
     const positive = state.rows.filter((row) => Number(row[gene]) > 0).length;
     return `${gene} is detected in ${positive} of ${state.rows.length} cells. I colored the projection by ${gene}.`;
   }
-
-  if (/compare|differential|versus| vs /.test(query)) {
+  if (/marker|signature/.test(intent.normalized) || (topModality === "transcriptomics" && intent.cluster && topOperation !== "compare")) {
+    const label = intent.cluster || controls.markerCluster.value || clusterLabels()[0];
+    controls.markerCluster.value = label;
+    renderMarkerTable();
+    const markers = (state.markers.get(label) || []).slice(0, 5).map((row) => row.gene).join(", ");
+    return `For ${label}, the strongest displayed marker genes are ${markers || "not available"}. I updated the marker table.`;
+  }
+  if (topOperation === "compare") {
     renderDifferentialTable();
     const first = $("deTable tr td");
-    return first ? `I ran the current group comparison. The strongest changing gene is ${first.textContent}.` : "I need at least two groups to compare.";
+    return first ? `I interpreted this as a group comparison. The strongest displayed changing gene is ${first.textContent}.` : "I interpreted this as a comparison, but I need at least two groups to compare.";
   }
-
-  if (/summary|overview|how many/.test(query)) {
-    return `This dataset has ${state.rows.length} cells, ${state.genes.length} numeric gene columns, and ${clusterLabels().length} computed clusters.`;
+  if (topOperation === "summarize") {
+    return `This loaded dataset has ${state.rows.length} cells/profiles, ${state.genes.length} numeric gene columns, and ${clusterLabels().length} computed clusters.`;
   }
-
-  if (/cluster/.test(query)) {
+  if (intent.normalized.includes("cluster")) {
     const counts = clusterLabels().map((label) => `${label}: ${state.rows.filter((row) => row.cluster === label).length}`).join("; ");
-    return `Cluster sizes are ${counts}. Ask for marker genes for a specific cluster to drill in.`;
+    return `Cluster sizes are ${counts}.`;
   }
-
-  return "I can answer questions about summaries, clusters, marker genes, gene expression overlays, highest-expressing cells, WormBase gene annotations, and group comparisons.";
+  return fallbackIntentAnswer(intent);
 }
 
-function isMultimodalQuestion(query) {
-  return /connectome|synap|gap junction|partner|connectivity|connected|spatial|anatom|near|coordinate|position|lineage|ancestor|descendant|same lineage|multimodal|transcriptionally similar/.test(query);
+function shouldUseMultimodalEngine(intent) {
+  const names = intent.modalities.map((item) => item.name);
+  return names.includes("multimodal") || names.includes("connectome") || names.includes("spatial") || names.includes("lineage");
+}
+
+function ambiguityNote(intent) {
+  const closeOperations = closeScoredNames(intent.operations);
+  const closeModalities = closeScoredNames(intent.modalities.filter((item) => item.name !== "multimodal"));
+  const notes = [];
+  if (closeOperations.length > 1) notes.push(`I see more than one possible operation (${closeOperations.join(", ")}), so I chose the one most supported by the query.`);
+  if (closeModalities.length > 1) notes.push(`The question touches multiple data modalities (${closeModalities.join(", ")}), so I treated it as an integrated query.`);
+  return notes.join(" ");
+}
+
+function closeScoredNames(items) {
+  if (!items.length) return [];
+  const best = items[0].score;
+  return items.filter((item) => item.score > 0 && best - item.score <= 1).map((item) => item.name);
+}
+
+function fallbackIntentAnswer(intent) {
+  const modalities = intent.modalities.map((item) => item.name).join(", ") || "transcriptomics";
+  const operations = intent.operations.map((item) => item.name).join(", ") || "retrieve";
+  return `I parsed this as operation(s): ${operations}; modality/modalities: ${modalities}. I need a more specific target such as a gene, neuron ID, cluster, comparison groups, or relationship to execute a precise query.`;
+}
+
+function extractNeuronEntities(message) {
+  const upper = message.toUpperCase();
+  return state.multimodalNeurons
+    .map((item) => item.neuron_id)
+    .filter((id) => new RegExp(`(^|[^A-Z0-9])${escapeRegex(id)}([^A-Z0-9]|$)`).test(upper));
 }
 
 async function answerMultimodalQuestion(message) {

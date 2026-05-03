@@ -146,6 +146,8 @@ If those files are absent, the app uses a small built-in adult neuron demo index
 
 The natural-language query engine is intentionally deterministic in this prototype: it extracts neuron IDs and maps terms such as `synaptic`, `connected`, `near`, `lineage`, and `transcriptionally similar` to the structured endpoints above. This can later be replaced by LLM function calling while preserving the same API tools.
 
+The main "Ask the dataset" chat uses a general intent planner rather than a one-question/one-template chain. It extracts entities, candidate modalities, operations, limits, clusters, and ambiguity; then routes to transcriptomic, WormBase, or multimodal tools. When several interpretations are plausible, the answer states that ambiguity before executing the best-supported query.
+
 ## Downloaded datasets
 
 Place full `.h5ad` files in `datasets/` and restart or refresh the portal. The sidebar will list them under "Downloaded datasets" so they can be loaded directly from the backend without re-uploading through the browser.
