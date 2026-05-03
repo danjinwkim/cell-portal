@@ -13,6 +13,7 @@ A local prototype web portal for single-cell RNA-seq exploration with natural-la
 - Computes normalized expression, a PCA-style 2D projection, lightweight clustering, cluster markers, and group differential expression.
 - Lets users color the interactive Plotly PCA projection by metadata, cluster, or gene expression.
 - PCA points are hoverable and clickable; selecting a point shows cell ID, cluster, cell type, top expressed genes, PC1/PC2 coordinates, and a biological interpretation.
+- Adds a **Global Clustering** tab with a pairwise transcriptomic similarity heatmap, top dendrogram, neuron-class block annotations, Pearson/cosine similarity options, and linked cluster highlighting back to the PCA view.
 - Includes a natural-language query box for common analysis tasks:
   - `show marker genes for cluster 2`
   - `plot MS4A1 expression`
@@ -109,6 +110,8 @@ Health check endpoint:
 ```
 
 The backend uses backed AnnData reading for H5AD uploads, then returns up to 3,000 cells and 250 selected genes by default. It prioritizes common interpretable marker genes and any `highly_variable` gene annotations. If the file already contains `X_umap`, `X_tsne`, `X_pca`, `leiden`, `louvain`, `cell_type`, or related annotations, the portal reuses them instead of recomputing everything in the browser.
+
+The Global Clustering view posts the already-loaded browser expression view to `/api/global-clustering`; the backend normalizes expression, computes a Pearson or cosine similarity matrix, runs SciPy hierarchical clustering, caches the result by dataset/settings, and returns Plotly-ready dendrogram and heatmap data.
 
 ## Downloaded datasets
 

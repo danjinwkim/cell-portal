@@ -12,11 +12,15 @@ const state = {
   serverClusters: [],
   geneMetadata: {},
   selectedCellIndex: null,
+  activeView: "pca",
+  globalClustering: null,
+  globalHighlightIndices: new Set(),
   markers: new Map(),
 };
 
 const palette = ["#1f7a8c", "#d88742", "#ba4a68", "#4d8d62", "#7353ba", "#247ba0", "#c44536", "#5b8e7d"];
 const numericThreshold = 0.9;
+const globalClusterCache = new Map();
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,6 +34,11 @@ const controls = {
   colorBy: $("colorBy"),
   geneOverlay: $("geneOverlay"),
   runAnalysis: $("runAnalysis"),
+  pcaTab: $("pcaTab"),
+  globalTab: $("globalTab"),
+  globalMetric: $("globalMetric"),
+  globalLinkage: $("globalLinkage"),
+  runGlobalClustering: $("runGlobalClustering"),
   markerCluster: $("markerCluster"),
   groupA: $("groupA"),
   groupB: $("groupB"),
@@ -64,6 +73,11 @@ controls.groupA.addEventListener("change", renderDifferentialTable);
 controls.groupB.addEventListener("change", renderDifferentialTable);
 controls.colorBy.addEventListener("change", schedulePlotRender);
 controls.geneOverlay.addEventListener("change", schedulePlotRender);
+controls.pcaTab.addEventListener("click", () => setActiveView("pca"));
+controls.globalTab.addEventListener("click", () => setActiveView("global"));
+controls.globalMetric.addEventListener("change", runGlobalClustering);
+controls.globalLinkage.addEventListener("change", runGlobalClustering);
+controls.runGlobalClustering.addEventListener("click", runGlobalClustering);
 
 controls.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -91,6 +105,8 @@ function loadParsedDataset(parsed, fileName) {
   state.serverProjection = parsed.projection || [];
   state.serverClusters = parsed.clusters || [];
   state.geneMetadata = parsed.geneMetadata || {};
+  state.globalClustering = null;
+  state.globalHighlightIndices = new Set();
   if (parsed.geneColumns && parsed.metadataColumns) {
     state.genes = parsed.geneColumns;
     state.metadata = parsed.metadataColumns;
@@ -100,6 +116,18 @@ function loadParsedDataset(parsed, fileName) {
   setDefaultColumns();
   populateSelectors();
   runAnalysis();
+}
+
+function setActiveView(view) {
+  state.activeView = view;
+  $("pcaView").classList.toggle("active", view === "pca");
+  $("globalView").classList.toggle("active", view === "global");
+  controls.pcaTab.classList.toggle("active", view === "pca");
+  controls.globalTab.classList.toggle("active", view === "global");
+  controls.pcaTab.setAttribute("aria-selected", String(view === "pca"));
+  controls.globalTab.setAttribute("aria-selected", String(view === "global"));
+  if (view === "pca") schedulePlotRender();
+  if (view === "global") scheduleGlobalClusteringRender();
 }
 
 async function uploadH5ad(file) {
@@ -338,6 +366,7 @@ function runAnalysis() {
   fillSelect(controls.groupB, groupValues(), groupValues()[1] || groupValues()[0]);
   computeMarkers();
   renderAll();
+  if (state.activeView === "global") scheduleGlobalClusteringRender();
   addChat("assistant", `Loaded ${state.fileName}. Ask for markers, clusters, expression of a gene, or a group comparison.`);
 }
 
@@ -431,6 +460,7 @@ function renderAll() {
   $("metricUmis").textContent = formatNumber(Math.round(median(state.rows.map((row) => state.genes.reduce((sum, gene) => sum + (Number(row[gene]) || 0), 0)))));
   $("metricClusters").textContent = clusterLabels().length;
   schedulePlotRender();
+  scheduleGlobalClusteringRender();
   renderMarkerTable();
   renderDifferentialTable();
   renderSelectedCell(state.selectedCellIndex ?? 0);
@@ -465,6 +495,7 @@ async function renderPlot() {
   const values = useGene ? state.rows.map((row) => Number(row[gene]) || 0) : state.rows.map((row) => row[colorBy] || "NA");
   const categories = useGene ? [] : [...new Set(values.map(String))];
   const markerColors = useGene ? values : values.map((value) => palette[categories.indexOf(String(value)) % palette.length]);
+  const hasGlobalHighlight = state.globalHighlightIndices.size > 0;
   plot.querySelectorAll(".plot-empty").forEach((element) => element.remove());
   const hoverText = state.rows.map((row, index) => {
     const point = state.projection[index];
@@ -494,8 +525,13 @@ async function renderPlot() {
       colorscale: useGene ? [[0, "#dbe7eb"], [1, "#ba4a68"]] : undefined,
       showscale: useGene,
       colorbar: useGene ? { title: gene, thickness: 12 } : undefined,
-      line: { color: "rgba(29,39,51,0.25)", width: 0.5 },
-      opacity: 0.86,
+      line: {
+        color: hasGlobalHighlight
+          ? state.rows.map((_, index) => (state.globalHighlightIndices.has(index) ? "#111827" : "rgba(29,39,51,0.18)"))
+          : "rgba(29,39,51,0.25)",
+        width: hasGlobalHighlight ? state.rows.map((_, index) => (state.globalHighlightIndices.has(index) ? 2 : 0.4)) : 0.5,
+      },
+      opacity: hasGlobalHighlight ? state.rows.map((_, index) => (state.globalHighlightIndices.has(index) ? 0.98 : 0.2)) : 0.86,
       size: state.rows.length > 1000 ? 5 : 9,
     },
   };
@@ -525,6 +561,209 @@ async function renderPlot() {
     }
   });
   renderLegend(useGene, categories, gene);
+}
+
+function scheduleGlobalClusteringRender() {
+  if (state.activeView !== "global") return;
+  requestAnimationFrame(() => {
+    void runGlobalClustering(false);
+  });
+}
+
+async function runGlobalClustering(force = true) {
+  const status = $("globalStatus");
+  if (!state.rows.length || !state.genes.length) {
+    status.textContent = "Load a dataset first";
+    $("dendrogramPlot").innerHTML = '<div class="plot-empty">Load neurons to compute a dendrogram.</div>';
+    $("globalHeatmap").innerHTML = '<div class="plot-empty">Load neurons to compute pairwise similarity.</div>';
+    return;
+  }
+  if (!window.Plotly) {
+    status.textContent = "Plotly is still loading";
+    return;
+  }
+
+  const payload = globalClusteringPayload();
+  if (payload.rows.length < 2) {
+    status.textContent = "Need at least two cells";
+    return;
+  }
+  const cacheKey = payload.cacheKey;
+  if (!force && globalClusterCache.has(cacheKey)) {
+    state.globalClustering = globalClusterCache.get(cacheKey);
+    renderGlobalClustering();
+    return;
+  }
+
+  status.textContent = `Computing ${payload.metric} similarity for ${payload.rows.length} profiles`;
+  controls.runGlobalClustering.disabled = true;
+  try {
+    const response = await fetch("/api/global-clustering", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const detail = await response.text();
+      throw new Error(detail || `Global clustering failed with status ${response.status}`);
+    }
+    state.globalClustering = await response.json();
+    globalClusterCache.set(cacheKey, state.globalClustering);
+    renderGlobalClustering();
+  } catch (error) {
+    status.textContent = "Global clustering failed";
+    $("globalHeatmap").innerHTML = `<div class="plot-empty">${error.message}</div>`;
+  } finally {
+    controls.runGlobalClustering.disabled = false;
+  }
+}
+
+function globalClusteringPayload() {
+  const limit = Math.min(state.rows.length, 500);
+  const rows = state.rows.slice(0, limit);
+  const metric = controls.globalMetric.value || "pearson";
+  const method = controls.globalLinkage.value || "average";
+  return {
+    metric,
+    method,
+    rows,
+    genes: state.genes,
+    labels: rows.map(cellLabel),
+    classes: rows.map(cellTypeLabel),
+    cacheKey: stableGlobalCacheKey(rows, metric, method),
+  };
+}
+
+function stableGlobalCacheKey(rows, metric, method) {
+  const total = rows.reduce((sum, row) => sum + state.genes.reduce((geneSum, gene) => geneSum + (Number(row[gene]) || 0), 0), 0);
+  return [state.fileName, rows.length, state.genes.length, metric, method, total.toFixed(3)].join("|");
+}
+
+function renderGlobalClustering() {
+  const result = state.globalClustering;
+  if (!result) return;
+  $("globalStatus").textContent = `${result.summary.cells} profiles, ${result.summary.genes} genes, ${result.summary.clusterCount} blocks`;
+  renderDendrogram(result);
+  renderSimilarityHeatmap(result);
+  renderClusterBlocks(result);
+}
+
+function renderDendrogram(result) {
+  const traces = result.dendrogram.icoord.map((xValues, index) => ({
+    type: "scatter",
+    mode: "lines",
+    x: xValues.map((value) => (value - 5) / 10),
+    y: result.dendrogram.dcoord[index],
+    line: { color: "#8a96a3", width: 1.4 },
+    hoverinfo: "skip",
+    showlegend: false,
+  }));
+  Plotly.react(
+    $("dendrogramPlot"),
+    traces,
+    {
+      margin: { l: 54, r: 18, t: 8, b: 6 },
+      paper_bgcolor: "#fbfcfc",
+      plot_bgcolor: "#fbfcfc",
+      xaxis: { showticklabels: false, range: [-0.5, result.labels.length - 0.5], fixedrange: false },
+      yaxis: { title: "Distance", zeroline: false, gridcolor: "#e5ecef" },
+    },
+    { responsive: true, displaylogo: false }
+  );
+}
+
+function renderSimilarityHeatmap(result) {
+  const labels = result.labels;
+  const customdata = result.similarity.map((row, rowIndex) =>
+    row.map((_, colIndex) => ({
+      rowIndex: result.order[rowIndex],
+      colIndex: result.order[colIndex],
+      cluster: result.clusters[rowIndex],
+      rowLabel: labels[rowIndex],
+      colLabel: labels[colIndex],
+    }))
+  );
+  const heatmap = {
+    type: "heatmap",
+    z: result.similarity,
+    x: labels,
+    y: labels,
+    customdata,
+    colorscale: [
+      [0, "#1946d2"],
+      [0.5, "#ffffff"],
+      [1, "#f01818"],
+    ],
+    zmin: -1,
+    zmax: 1,
+    colorbar: { title: result.metric === "cosine" ? "cosine" : "corr", thickness: 12 },
+    hovertemplate: "%{customdata.rowLabel} vs %{customdata.colLabel}<br>Similarity: %{z:.3f}<extra></extra>",
+  };
+  const layout = {
+    margin: { l: 74, r: 22, t: 8, b: 86 },
+    paper_bgcolor: "#fbfcfc",
+    plot_bgcolor: "#fbfcfc",
+    dragmode: "pan",
+    xaxis: { tickangle: 60, tickfont: { size: labels.length > 80 ? 7 : 9 }, automargin: true },
+    yaxis: { autorange: "reversed", tickfont: { size: labels.length > 80 ? 7 : 9 }, automargin: true },
+    shapes: globalBlockShapes(result),
+  };
+  const heatmapElement = $("globalHeatmap");
+  Plotly.react(heatmapElement, [heatmap], layout, {
+    responsive: true,
+    displaylogo: false,
+    scrollZoom: true,
+    modeBarButtonsToRemove: ["lasso2d", "select2d"],
+  });
+  if (heatmapElement.removeAllListeners) heatmapElement.removeAllListeners("plotly_click");
+  heatmapElement.on("plotly_click", (event) => {
+    const data = event.points?.[0]?.customdata;
+    if (!data) return;
+    highlightGlobalCluster(data.cluster);
+    state.selectedCellIndex = data.rowIndex;
+    renderSelectedCell(data.rowIndex);
+  });
+}
+
+function globalBlockShapes(result) {
+  const shapes = [];
+  result.blocks.forEach((block, index) => {
+    const color = palette[index % palette.length];
+    shapes.push({
+      type: "rect",
+      xref: "x",
+      yref: "y",
+      x0: block.start - 0.5,
+      x1: block.end + 0.5,
+      y0: block.start - 0.5,
+      y1: block.end + 0.5,
+      line: { color, width: 2 },
+      fillcolor: "rgba(0,0,0,0)",
+    });
+  });
+  return shapes;
+}
+
+function renderClusterBlocks(result) {
+  const container = $("clusterBlocks");
+  container.innerHTML = "";
+  result.blocks.forEach((block, index) => {
+    const button = document.createElement("button");
+    button.className = "cluster-chip";
+    button.type = "button";
+    button.innerHTML = `<i style="background:${palette[index % palette.length]}"></i><div><strong>${block.label}</strong><br><span>Cluster ${block.cluster}, n=${block.count}</span></div>`;
+    button.addEventListener("click", () => highlightGlobalCluster(block.cluster));
+    container.appendChild(button);
+  });
+}
+
+function highlightGlobalCluster(clusterId) {
+  const result = state.globalClustering;
+  if (!result) return;
+  const selected = result.order.filter((originalIndex, orderedIndex) => result.clusters[orderedIndex] === clusterId);
+  state.globalHighlightIndices = new Set(selected);
+  $("globalStatus").textContent = `Highlighted cluster ${clusterId} (${selected.length} profiles)`;
+  schedulePlotRender();
 }
 
 function renderSelectedCell(index) {

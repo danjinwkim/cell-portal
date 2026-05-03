@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
+from scipy.spatial.distance import squareform
 from scipy import sparse
 
 
@@ -79,6 +81,7 @@ COMMON_MARKER_GENES = (
 )
 
 app = FastAPI(title="Cell Portal")
+GLOBAL_CLUSTER_CACHE: dict[str, dict[str, Any]] = {}
 
 
 @app.get("/api/health")
@@ -146,6 +149,41 @@ async def wormbase_gene(gene_name: str, gene_id: Optional[str] = None) -> dict[s
         raise HTTPException(status_code=502, detail=f"WormBase lookup failed: {exc}") from exc
 
 
+@app.post("/api/global-clustering")
+async def global_clustering(payload: dict[str, Any]) -> dict[str, Any]:
+    """Compute a pairwise neuron similarity heatmap and dendrogram from the loaded expression view."""
+    rows = payload.get("rows") or []
+    genes = payload.get("genes") or []
+    labels = payload.get("labels") or []
+    classes = payload.get("classes") or []
+    metric = str(payload.get("metric") or "pearson").lower()
+    method = str(payload.get("method") or "average").lower()
+    cache_key = str(payload.get("cacheKey") or "")
+
+    if cache_key and cache_key in GLOBAL_CLUSTER_CACHE:
+        return GLOBAL_CLUSTER_CACHE[cache_key]
+    if not rows or not genes:
+        raise HTTPException(status_code=400, detail="Global clustering needs loaded cells and numeric gene columns.")
+    if len(rows) > 600:
+        raise HTTPException(status_code=400, detail="Global clustering is limited to 600 displayed cells for interactive use.")
+    if metric not in {"pearson", "cosine"}:
+        raise HTTPException(status_code=400, detail="Metric must be pearson or cosine.")
+    if method not in {"average", "complete", "single", "ward"}:
+        raise HTTPException(status_code=400, detail="Linkage method must be average, complete, single, or ward.")
+
+    matrix = np.asarray([[float(row.get(gene) or 0.0) for gene in genes] for row in rows], dtype=np.float64)
+    matrix = normalize_expression_matrix(matrix)
+    labels = [clean_label(label) or f"cell_{index + 1}" for index, label in enumerate(labels)]
+    classes = [clean_label(value) or "Unannotated" for value in classes]
+    result = compute_global_clustering(matrix, labels, classes, metric, method)
+
+    if cache_key:
+        GLOBAL_CLUSTER_CACHE[cache_key] = result
+        if len(GLOBAL_CLUSTER_CACHE) > 12:
+            GLOBAL_CLUSTER_CACHE.pop(next(iter(GLOBAL_CLUSTER_CACHE)))
+    return result
+
+
 def h5ad_to_portal_payload(path: Path, label: str) -> dict[str, Any]:
     adata = ad.read_h5ad(path, backed="r")
     try:
@@ -192,6 +230,96 @@ def h5ad_to_portal_payload(path: Path, label: str) -> dict[str, Any]:
         return response
     finally:
         adata.file.close()
+
+
+def normalize_expression_matrix(matrix: np.ndarray) -> np.ndarray:
+    totals = matrix.clip(min=0).sum(axis=1, keepdims=True)
+    totals[totals == 0] = 1
+    normalized = np.log1p((matrix.clip(min=0) / totals) * 10000)
+    normalized -= normalized.mean(axis=0, keepdims=True)
+    std = normalized.std(axis=0, keepdims=True)
+    std[std == 0] = 1
+    return normalized / std
+
+
+def compute_global_clustering(
+    matrix: np.ndarray,
+    labels: list[str],
+    classes: list[str],
+    metric: str,
+    method: str,
+) -> dict[str, Any]:
+    similarity = similarity_matrix(matrix, metric)
+    distance = np.clip(1 - similarity, 0, 2)
+    np.fill_diagonal(distance, 0)
+    condensed = squareform(distance, checks=False)
+    linkage_method = "average" if method == "ward" and metric != "pearson" else method
+    tree = linkage(condensed, method=linkage_method)
+    tree_info = dendrogram(tree, no_plot=True)
+    order = [int(index) for index in tree_info["leaves"]]
+    ordered_similarity = similarity[np.ix_(order, order)]
+    ordered_labels = [labels[index] for index in order]
+    ordered_classes = [classes[index] for index in order]
+    flat_clusters = [int(value) for value in fcluster(tree, t=min(12, len(labels)), criterion="maxclust")]
+    ordered_cluster_ids = [flat_clusters[index] for index in order]
+
+    return {
+        "metric": metric,
+        "method": linkage_method,
+        "labels": ordered_labels,
+        "classes": ordered_classes,
+        "order": order,
+        "similarity": round_matrix(ordered_similarity),
+        "dendrogram": {
+            "icoord": tree_info["icoord"],
+            "dcoord": tree_info["dcoord"],
+        },
+        "clusters": ordered_cluster_ids,
+        "blocks": class_blocks(ordered_classes, ordered_cluster_ids),
+        "summary": {
+            "cells": len(labels),
+            "genes": int(matrix.shape[1]),
+            "clusterCount": len(set(flat_clusters)),
+        },
+    }
+
+
+def similarity_matrix(matrix: np.ndarray, metric: str) -> np.ndarray:
+    if metric == "cosine":
+        norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+        norms[norms == 0] = 1
+        normalized = matrix / norms
+        similarity = normalized @ normalized.T
+    else:
+        similarity = np.corrcoef(matrix)
+    similarity = np.nan_to_num(similarity, nan=0.0, posinf=1.0, neginf=-1.0)
+    similarity = np.clip(similarity, -1, 1)
+    np.fill_diagonal(similarity, 1)
+    return similarity
+
+
+def round_matrix(matrix: np.ndarray) -> list[list[float]]:
+    return [[round(float(value), 4) for value in row] for row in matrix]
+
+
+def class_blocks(classes: list[str], cluster_ids: list[int]) -> list[dict[str, Any]]:
+    blocks = []
+    if not classes:
+        return blocks
+    start = 0
+    for index in range(1, len(classes) + 1):
+        if index == len(classes) or classes[index] != classes[start]:
+            blocks.append(
+                {
+                    "start": start,
+                    "end": index - 1,
+                    "label": classes[start],
+                    "cluster": cluster_ids[start],
+                    "count": index - start,
+                }
+            )
+            start = index
+    return blocks
 
 
 def dataset_label(filename: str) -> str:

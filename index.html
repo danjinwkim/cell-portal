@@ -90,23 +90,60 @@
                 <p class="eyebrow">Embedding</p>
                 <h3>PCA projection</h3>
               </div>
-              <div class="legend" id="plotLegend"></div>
-            </div>
-            <div id="pcaPlot" class="plotly-surface" role="img" aria-label="Interactive PCA projection"></div>
-            <section class="cell-detail" id="cellDetail">
-              <div class="section-header">
-                <div>
-                  <p class="eyebrow">Selected cell</p>
-                  <h3 id="selectedCellTitle">Click a point</h3>
-                </div>
+              <div class="view-tabs" role="tablist" aria-label="Analysis views">
+                <button id="pcaTab" class="view-tab active" type="button" aria-selected="true">PCA</button>
+                <button id="globalTab" class="view-tab" type="button" aria-selected="false">Global Clustering</button>
               </div>
-              <dl class="cell-facts">
-                <div><dt>Cluster</dt><dd id="selectedCellCluster">-</dd></div>
-                <div><dt>Cell type</dt><dd id="selectedCellType">-</dd></div>
-                <div><dt>PC1 / PC2</dt><dd id="selectedCellCoords">-</dd></div>
-                <div><dt>Top genes</dt><dd id="selectedCellGenes">-</dd></div>
-              </dl>
-              <p id="selectedCellBio">Select a cell to see its biological interpretation and why it occupies this PCA region.</p>
+            </div>
+            <section id="pcaView" class="analysis-view active">
+              <div class="legend" id="plotLegend"></div>
+              <div id="pcaPlot" class="plotly-surface" role="img" aria-label="Interactive PCA projection"></div>
+              <section class="cell-detail" id="cellDetail">
+                <div class="section-header">
+                  <div>
+                    <p class="eyebrow">Selected cell</p>
+                    <h3 id="selectedCellTitle">Click a point</h3>
+                  </div>
+                </div>
+                <dl class="cell-facts">
+                  <div><dt>Cluster</dt><dd id="selectedCellCluster">-</dd></div>
+                  <div><dt>Cell type</dt><dd id="selectedCellType">-</dd></div>
+                  <div><dt>PC1 / PC2</dt><dd id="selectedCellCoords">-</dd></div>
+                  <div><dt>Top genes</dt><dd id="selectedCellGenes">-</dd></div>
+                </dl>
+                <p id="selectedCellBio">Select a cell to see its biological interpretation and why it occupies this PCA region.</p>
+              </section>
+            </section>
+            <section id="globalView" class="analysis-view">
+              <div class="global-toolbar">
+                <label>
+                  Similarity
+                  <select id="globalMetric">
+                    <option value="pearson">Pearson correlation</option>
+                    <option value="cosine">Cosine similarity</option>
+                  </select>
+                </label>
+                <label>
+                  Linkage
+                  <select id="globalLinkage">
+                    <option value="average">Average</option>
+                    <option value="ward">Ward</option>
+                    <option value="complete">Complete</option>
+                  </select>
+                </label>
+                <button id="runGlobalClustering" class="primary-btn" type="button">Run clustering</button>
+                <div id="globalStatus" class="status-inline">Waiting for data</div>
+              </div>
+              <div class="global-grid">
+                <div class="global-plot-stack">
+                  <div id="dendrogramPlot" class="dendrogram-surface" role="img" aria-label="Hierarchical clustering dendrogram"></div>
+                  <div id="globalHeatmap" class="heatmap-surface" role="img" aria-label="Pairwise transcriptomic similarity heatmap"></div>
+                </div>
+                <aside class="cluster-panel">
+                  <p class="eyebrow">Cluster blocks</p>
+                  <div id="clusterBlocks" class="cluster-blocks"></div>
+                </aside>
+              </div>
             </section>
           </article>
 
@@ -184,6 +221,6 @@
     </main>
 
     <script src="vendor/plotly-2.35.2.min.js"></script>
-    <script src="app.js?v=11"></script>
+    <script src="app.js?v=12"></script>
   </body>
 </html>
