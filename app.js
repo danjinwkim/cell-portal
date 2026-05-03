@@ -796,14 +796,7 @@ async function runMultimodalQuery(query) {
   if (!query) return;
   $("multimodalSummary").textContent = "Running multimodal query";
   try {
-    const response = await fetch("/api/multimodal/query", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    const result = await response.json();
-    state.multimodalHighlightIds = new Set(result.highlighted_neurons.map(normalizeNeuronId));
+    const result = await executeMultimodalQuery(query);
     $("multimodalSummary").textContent = `${result.kind.replaceAll("_", " ")}: ${result.highlighted_neurons.length} highlighted neurons`;
     renderMultimodalResults(result);
     renderMultimodalViews(result.highlighted_neurons);
@@ -811,6 +804,25 @@ async function runMultimodalQuery(query) {
   } catch (error) {
     $("multimodalSummary").textContent = `Query failed: ${error.message}`;
   }
+}
+
+async function executeMultimodalQuery(query) {
+  const response = await fetch("/api/multimodal/query", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      dataset: {
+        fileName: state.fileName,
+        cells: state.rows.length,
+        genes: state.genes.length,
+      },
+    }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const result = await response.json();
+  state.multimodalHighlightIds = new Set(result.highlighted_neurons.map(normalizeNeuronId));
+  return result;
 }
 
 function renderMultimodalResults(result) {
@@ -1025,8 +1037,11 @@ function renderDifferentialTable() {
 }
 
 async function answerQuestion(message) {
-  if (!state.rows.length) return "Upload or load a dataset first, then I can query it.";
   const query = message.toLowerCase();
+  if (isMultimodalQuestion(query)) {
+    return await answerMultimodalQuestion(message);
+  }
+  if (!state.rows.length) return "Upload or load a dataset first, then I can query it.";
   const cluster = clusterLabels().find((label) => query.includes(label.toLowerCase())) || matchClusterNumber(query);
   const genes = extractGenes(message);
   const gene = genes[0];
@@ -1072,6 +1087,110 @@ async function answerQuestion(message) {
   }
 
   return "I can answer questions about summaries, clusters, marker genes, gene expression overlays, highest-expressing cells, WormBase gene annotations, and group comparisons.";
+}
+
+function isMultimodalQuestion(query) {
+  return /connectome|synap|gap junction|partner|connectivity|connected|spatial|anatom|near|coordinate|position|lineage|ancestor|descendant|same lineage|multimodal|transcriptionally similar/.test(query);
+}
+
+async function answerMultimodalQuestion(message) {
+  try {
+    const result = await executeMultimodalQuery(message);
+    $("multimodalSummary").textContent = `${result.kind.replaceAll("_", " ")}: ${result.highlighted_neurons.length} highlighted neurons`;
+    renderMultimodalResults(result);
+    renderMultimodalViews(result.highlighted_neurons);
+    schedulePlotRender();
+    return formatMultimodalChatAnswer(result);
+  } catch (error) {
+    return `I could not run the multimodal query right now. Details: ${error.message}`;
+  }
+}
+
+function formatMultimodalChatAnswer(result) {
+  const highlighted = result.highlighted_neurons || [];
+  const resultRows = Array.isArray(result.result) ? result.result : [result.result];
+  const topRows = resultRows.slice(0, 5).map(formatMultimodalResultRow).filter(Boolean);
+  const datasetContext = transcriptomicContextForNeurons(highlighted);
+  const intro = `I interpreted this as a ${result.kind.replaceAll("_", " ")} query and highlighted ${highlighted.length} neuron(s) across the PCA, connectome, spatial, and lineage views.`;
+  const findings = topRows.length ? ` Key results: ${topRows.join("; ")}.` : "";
+  return `${intro}${findings}${datasetContext}`;
+}
+
+function formatMultimodalResultRow(item) {
+  if (!item || typeof item !== "object") return "";
+  if (item.source && item.target) {
+    return `${item.source}-${item.target} (${item.relationship || "relationship"}, weight ${Number(item.total_weight || 0).toFixed(1)})`;
+  }
+  if (item.neuron_id && item.distance !== undefined) {
+    const distance = item.distance === null ? "not spatially indexed" : `${Number(item.distance).toFixed(2)} units`;
+    const weight = item.total_weight !== undefined ? `, synaptic weight ${Number(item.total_weight).toFixed(1)}` : "";
+    return `${item.neuron_id} (${distance}${weight})`;
+  }
+  if (item.neuron_id && item.ancestors) {
+    return `${item.neuron_id} lineage ${item.ancestors.join(" > ")}; similar lineage: ${(item.similar_lineage || []).join(", ") || "none"}`;
+  }
+  if (item.neuron_id && item.neighbors) {
+    return `${item.neuron_id} has ${item.degree || item.neighbors.length} connected neighbor(s)`;
+  }
+  return Object.entries(item)
+    .slice(0, 4)
+    .map(([key, value]) => `${key}: ${Array.isArray(value) ? value.join(", ") : value}`)
+    .join(", ");
+}
+
+function transcriptomicContextForNeurons(neuronIds) {
+  if (!state.rows.length) {
+    return " No expression dataset is currently loaded, so this answer uses the multimodal neuron index only.";
+  }
+  const matches = neuronIds
+    .map((neuronId) => ({ neuronId, rows: matchingDatasetRows(neuronId).slice(0, 3) }))
+    .filter((item) => item.rows.length);
+  if (!matches.length) {
+    return ` I did not find exact matching neuron IDs in the loaded expression view (${state.fileName}), so transcriptomic highlighting uses the multimodal IDs only.`;
+  }
+  const summaries = matches.slice(0, 6).map(({ neuronId, rows }) => {
+    const clusters = [...new Set(rows.map((row) => row.cluster || cellTypeLabel(row)).filter(Boolean))].slice(0, 3).join(", ");
+    const topGenes = topExpressedGenes(rows[0], 3).map((item) => item.gene).join(", ");
+    return `${neuronId}: ${clusters || "unclustered"}${topGenes ? `; top displayed genes ${topGenes}` : ""}`;
+  });
+  const similarity = transcriptomicSimilaritySummary(matches.map((item) => item.neuronId));
+  return ` Transcriptomic context from ${state.fileName}: ${summaries.join("; ")}.${similarity}`;
+}
+
+function matchingDatasetRows(neuronId) {
+  const normalized = normalizeNeuronId(neuronId);
+  return state.rows.filter((row) => {
+    const candidates = [cellLabel(row), cellTypeLabel(row), row.neuron_id, row.cell_id, row.annotation, row.assigned_cell_type].map(normalizeNeuronId);
+    return candidates.some((value) => value === normalized || new RegExp(`(^|[^A-Z0-9])${escapeRegex(normalized)}([^A-Z0-9]|$)`).test(value));
+  });
+}
+
+function transcriptomicSimilaritySummary(neuronIds) {
+  const matchedRows = neuronIds.flatMap((id) => matchingDatasetRows(id).slice(0, 1));
+  if (matchedRows.length < 2) return "";
+  const pairs = [];
+  for (let i = 0; i < matchedRows.length; i += 1) {
+    for (let j = i + 1; j < matchedRows.length; j += 1) {
+      pairs.push({
+        a: cellLabel(matchedRows[i]),
+        b: cellLabel(matchedRows[j]),
+        value: pearsonForRows(matchedRows[i], matchedRows[j]),
+      });
+    }
+  }
+  const best = pairs.sort((left, right) => right.value - left.value)[0];
+  return best ? ` Strongest matched transcriptomic similarity: ${best.a}-${best.b} r=${best.value.toFixed(2)}.` : "";
+}
+
+function pearsonForRows(left, right) {
+  const a = state.genes.map((gene) => Number(left[gene]) || 0);
+  const b = state.genes.map((gene) => Number(right[gene]) || 0);
+  const meanA = mean(a);
+  const meanB = mean(b);
+  const numerator = a.reduce((sum, value, index) => sum + (value - meanA) * (b[index] - meanB), 0);
+  const denomA = Math.sqrt(a.reduce((sum, value) => sum + (value - meanA) ** 2, 0));
+  const denomB = Math.sqrt(b.reduce((sum, value) => sum + (value - meanB) ** 2, 0));
+  return denomA && denomB ? numerator / (denomA * denomB) : 0;
 }
 
 function isGeneInfoQuestion(query) {
