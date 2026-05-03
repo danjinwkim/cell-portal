@@ -16,7 +16,7 @@ RUN apt-get update \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY server.py index.html app.js styles.css README.md ./
+COPY server.py multimodal_store.py index.html app.js styles.css README.md ./
 COPY vendor ./vendor
 
 RUN mkdir -p /app/datasets /app/cache/wormbase
