@@ -9,3 +9,4 @@ datasets/*.h5ad
 
 # Keep cached API responses local unless you intentionally want to seed them.
 cache/
+.vercel

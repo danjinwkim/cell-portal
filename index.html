@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Cell Portal</title>
+    <title>Cell Portal | C. elegans single-cell explorer</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -55,7 +55,19 @@
         </section>
       </aside>
 
-      <section class="workspace">
+      <section class="workspace" id="toolWorkspace">
+        <section class="home-intro" aria-labelledby="homeTitle">
+          <div>
+            <p class="eyebrow">Public web portal</p>
+            <h2 id="homeTitle">C. elegans Single-Cell RNA-seq Cell Portal</h2>
+            <p>
+              Explore uploaded CSV, TSV, and H5AD datasets with interactive PCA, global clustering,
+              marker discovery, multimodal neuron context, and natural-language dataset queries.
+            </p>
+          </div>
+          <a class="launch-btn" href="#datasetFile">Launch explorer</a>
+        </section>
+
         <header class="topbar">
           <div>
             <p class="eyebrow">Interactive analysis</p>
