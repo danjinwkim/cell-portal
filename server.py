@@ -191,6 +191,7 @@ async def multimodal_query(payload: dict[str, Any]) -> dict[str, Any]:
 async def global_clustering(payload: dict[str, Any]) -> dict[str, Any]:
     """Compute a pairwise neuron similarity heatmap and dendrogram from the loaded expression view."""
     rows = payload.get("rows") or []
+    payload_matrix = payload.get("matrix")
     genes = payload.get("genes") or []
     labels = payload.get("labels") or []
     classes = payload.get("classes") or []
@@ -200,19 +201,33 @@ async def global_clustering(payload: dict[str, Any]) -> dict[str, Any]:
 
     if cache_key and cache_key in GLOBAL_CLUSTER_CACHE:
         return GLOBAL_CLUSTER_CACHE[cache_key]
-    if not rows or not genes:
-        raise HTTPException(status_code=400, detail="Global clustering needs loaded cells and numeric gene columns.")
-    if len(rows) > 600:
+    if payload_matrix is not None:
+        try:
+            matrix = np.asarray(payload_matrix, dtype=np.float64)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Global clustering matrix must contain only numeric values.")
+    else:
+        if not rows or not genes:
+            raise HTTPException(status_code=400, detail="Global clustering needs loaded cells and numeric gene columns.")
+        try:
+            matrix = np.asarray([[float(row.get(gene) or 0.0) for gene in genes] for row in rows], dtype=np.float64)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail="Global clustering needs numeric expression values.")
+
+    if matrix.ndim != 2 or matrix.shape[0] < 2 or matrix.shape[1] < 1:
+        raise HTTPException(status_code=400, detail="Global clustering needs at least two cells and one numeric gene.")
+    if matrix.shape[0] > 600:
         raise HTTPException(status_code=400, detail="Global clustering is limited to 600 displayed cells for interactive use.")
     if metric not in {"pearson", "cosine"}:
         raise HTTPException(status_code=400, detail="Metric must be pearson or cosine.")
     if method not in {"average", "complete", "single", "ward"}:
         raise HTTPException(status_code=400, detail="Linkage method must be average, complete, single, or ward.")
 
-    matrix = np.asarray([[float(row.get(gene) or 0.0) for gene in genes] for row in rows], dtype=np.float64)
     matrix = normalize_expression_matrix(matrix)
-    labels = [clean_label(label) or f"cell_{index + 1}" for index, label in enumerate(labels)]
-    classes = [clean_label(value) or "Unannotated" for value in classes]
+    labels = [clean_label(labels[index]) if index < len(labels) else "" for index in range(matrix.shape[0])]
+    labels = [label or f"cell_{index + 1}" for index, label in enumerate(labels)]
+    classes = [clean_label(classes[index]) if index < len(classes) else "" for index in range(matrix.shape[0])]
+    classes = [value or "Unannotated" for value in classes]
     result = compute_global_clustering(matrix, labels, classes, metric, method)
 
     if cache_key:

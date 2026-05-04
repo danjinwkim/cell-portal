@@ -309,6 +309,17 @@ function coerce(value = "") {
   return Number.isFinite(number) ? number : trimmed;
 }
 
+async function responseErrorMessage(response, fallback) {
+  const text = await response.text();
+  if (!text) return `${fallback} with status ${response.status}`;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed.detail || parsed.message || text;
+  } catch {
+    return text;
+  }
+}
+
 function classifyColumns() {
   state.genes = [];
   state.metadata = [];
@@ -618,14 +629,13 @@ async function runGlobalClustering(force = true) {
       body: JSON.stringify(payload),
     });
     if (!response.ok) {
-      const detail = await response.text();
-      throw new Error(detail || `Global clustering failed with status ${response.status}`);
+      throw new Error(await responseErrorMessage(response, "Global clustering failed"));
     }
     state.globalClustering = await response.json();
     globalClusterCache.set(cacheKey, state.globalClustering);
     renderGlobalClustering();
   } catch (error) {
-    status.textContent = "Global clustering failed";
+    status.textContent = `Global clustering failed: ${error.message}`;
     $("globalHeatmap").innerHTML = `<div class="plot-empty">${error.message}</div>`;
   } finally {
     controls.runGlobalClustering.disabled = false;
@@ -637,10 +647,11 @@ function globalClusteringPayload() {
   const rows = state.rows.slice(0, limit);
   const metric = controls.globalMetric.value || "pearson";
   const method = controls.globalLinkage.value || "average";
+  const matrix = rows.map((row) => state.genes.map((gene) => Number(row[gene]) || 0));
   return {
     metric,
     method,
-    rows,
+    matrix,
     genes: state.genes,
     labels: rows.map(cellLabel),
     classes: rows.map(cellTypeLabel),
