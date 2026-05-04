@@ -15,6 +15,7 @@ import anndata as ad
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 from scipy.spatial.distance import squareform
@@ -83,6 +84,12 @@ COMMON_MARKER_GENES = (
 )
 
 app = FastAPI(title="Cell Portal")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 GLOBAL_CLUSTER_CACHE: dict[str, dict[str, Any]] = {}
 
 
@@ -113,7 +120,8 @@ async def upload_h5ad(file: UploadFile = File(...)) -> dict[str, Any]:
 
 @app.get("/api/datasets")
 async def list_datasets() -> list[dict[str, Any]]:
-    DATASETS_DIR.mkdir(exist_ok=True)
+    if not DATASETS_DIR.exists():
+        return []
     datasets = []
     for path in sorted(DATASETS_DIR.glob("*.h5ad")):
         datasets.append(
@@ -667,10 +675,17 @@ def existing_clusters(adata: ad.AnnData, cell_idx: np.ndarray) -> list[str]:
 
 
 def subset_matrix(adata: ad.AnnData, cell_idx: np.ndarray, gene_idx: np.ndarray) -> np.ndarray:
+    # h5py-backed AnnData requires column indices in increasing order.
+    # Reorder after reading so the frontend still sees genes in marker/HVG priority order.
+    gene_order = np.argsort(gene_idx)
+    sorted_gene_idx = gene_idx[gene_order]
+    restore_order = np.argsort(gene_order)
     if len(cell_idx) and np.array_equal(cell_idx, np.arange(len(cell_idx))):
-        return to_dense(adata.X[: len(cell_idx), gene_idx])
+        matrix = to_dense(adata.X[: len(cell_idx), sorted_gene_idx])
+        return matrix[:, restore_order]
     cell_view = adata[cell_idx, :].to_memory()
-    return to_dense(cell_view.X[:, gene_idx])
+    matrix = to_dense(cell_view.X[:, sorted_gene_idx])
+    return matrix[:, restore_order]
 
 
 def readable_gene_names(adata: ad.AnnData) -> list[str]:

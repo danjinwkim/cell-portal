@@ -25,6 +25,9 @@ const numericThreshold = 0.9;
 const maxGlobalClusterCells = 350;
 const maxGlobalClusterGenes = 120;
 const globalClusterCache = new Map();
+const deployedApiBase = "https://celegans-single-cell-rnaseq-explorer.vercel.app";
+const apiBase = location.protocol === "file:" ? deployedApiBase : "";
+const apiUrl = (path) => `${apiBase}${path}`;
 
 const $ = (id) => document.getElementById(id);
 
@@ -149,7 +152,7 @@ async function uploadH5ad(file) {
   formData.append("file", file);
 
   try {
-    const response = await fetch("/api/upload-h5ad", {
+    const response = await fetch(apiUrl("/api/upload-h5ad"), {
       method: "POST",
       body: formData,
     });
@@ -186,6 +189,23 @@ function explainH5adUploadError(error) {
         `For full H5AD datasets, use the local app or a paid Render/VPS deployment with datasets mounted on the server. Details: ${detail}`,
     };
   }
+  if (location.protocol === "file:") {
+    return {
+      status: "Use public link",
+      text:
+        "This page was opened as a local file, so I routed the upload to the public Cell Portal backend. " +
+        "If the upload still fails, open https://celegans-single-cell-rnaseq-explorer.vercel.app directly and try again. " +
+        `Details: ${detail}`,
+    };
+  }
+  if (location.hostname.endsWith("vercel.app")) {
+    return {
+      status: "Hosted H5AD upload failed",
+      text:
+        "The public Vercel backend is available for H5AD parsing, but very large H5AD files can exceed serverless upload or execution limits. " +
+        `Try a smaller processed H5AD view or run the local backend for full-size files. Details: ${detail}`,
+    };
+  }
   return {
     status: "H5AD backend unavailable",
     text:
@@ -196,7 +216,7 @@ function explainH5adUploadError(error) {
 
 async function refreshServerDatasets() {
   try {
-    const response = await fetch("/api/datasets");
+    const response = await fetch(apiUrl("/api/datasets"));
     if (!response.ok) throw new Error("Dataset registry is unavailable");
     const datasets = await response.json();
     controls.serverDataset.innerHTML = "";
@@ -212,9 +232,11 @@ async function refreshServerDatasets() {
       option.textContent = dataset.label;
       controls.serverDataset.appendChild(option);
     }
-  } catch {
-    fillSelect(controls.serverDataset, ["Backend not ready"], "Backend not ready");
+  } catch (error) {
+    const label = location.protocol === "file:" ? "Open public website for H5AD" : "Backend not ready";
+    fillSelect(controls.serverDataset, [label], label);
     controls.loadServerDataset.disabled = true;
+    console.warn("Dataset backend unavailable", error);
   }
 }
 
@@ -222,7 +244,7 @@ async function loadServerDataset(datasetId) {
   $("analysisStatus").textContent = "Loading downloaded H5AD";
   addChat("assistant", "Loading the server-side H5AD view directly. This skips the browser re-upload step.");
   try {
-    const response = await fetch(`/api/datasets/${encodeURIComponent(datasetId)}`);
+    const response = await fetch(apiUrl(`/api/datasets/${encodeURIComponent(datasetId)}`));
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(detail || `Load failed with status ${response.status}`);
@@ -627,7 +649,7 @@ async function runGlobalClustering(force = true) {
   status.textContent = `Computing ${payload.metric} similarity for ${payload.matrix.length} profiles and ${payload.genes.length} informative genes`;
   controls.runGlobalClustering.disabled = true;
   try {
-    const response = await fetch("/api/global-clustering", {
+    const response = await fetch(apiUrl("/api/global-clustering"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
@@ -814,7 +836,7 @@ function highlightGlobalCluster(clusterId) {
 async function loadMultimodalIndex() {
   if (!$("multimodalSummary")) return;
   try {
-    const response = await fetch("/api/multimodal/neurons");
+    const response = await fetch(apiUrl("/api/multimodal/neurons"));
     if (!response.ok) throw new Error("Multimodal API unavailable");
     state.multimodalNeurons = await response.json();
     renderMultimodalViews(state.multimodalNeurons.slice(0, 6).map((item) => item.neuron_id));
@@ -840,7 +862,7 @@ async function runMultimodalQuery(query) {
 }
 
 async function executeMultimodalQuery(query) {
-  const response = await fetch("/api/multimodal/query", {
+  const response = await fetch(apiUrl("/api/multimodal/query"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1320,7 +1342,7 @@ async function answerWormBaseQuestion(gene, query) {
   }
 
   try {
-    const response = await fetch(`/api/wormbase/gene/${encodeURIComponent(gene)}?gene_id=${encodeURIComponent(metadata.id)}`);
+    const response = await fetch(apiUrl(`/api/wormbase/gene/${encodeURIComponent(gene)}?gene_id=${encodeURIComponent(metadata.id)}`));
     if (!response.ok) {
       const detail = await response.text();
       throw new Error(detail || `status ${response.status}`);
