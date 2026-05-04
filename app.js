@@ -1094,7 +1094,8 @@ function renderDifferentialTable() {
 
 async function answerQuestion(message) {
   const intent = analyzeQuery(message);
-  const ambiguity = ambiguityNote(intent);
+  const useMultimodal = shouldUseMultimodalEngine(intent);
+  const ambiguity = useMultimodal ? "" : ambiguityNote(intent);
   const response = await executeQueryIntent(intent, message);
   return ambiguity ? `${ambiguity} ${response}` : response;
 }
@@ -1258,15 +1259,23 @@ async function executeMultimodalQueryPlan(query) {
 }
 
 function formatQueryPlanAnswer(result) {
-  const modalities = result.modalities.length ? result.modalities.join(", ") : "metadata";
-  const steps = result.query_plan.map((step, index) => `${index + 1}. ${step}`).join(" ");
   const rows = result.results.slice(0, 5);
-  const summary = rows.length
-    ? rows
-        .map((item) => `${item.neuron_id}: weight ${Number(item.connection_weight || 0).toFixed(1)}, distance ${item.distance ?? "NA"}, shared lineage depth ${item.shared_lineage_depth}`)
-        .join("; ")
-    : "No matching neurons were found with the current indexed data.";
-  return `I interpreted this as a ${modalities} query anchored on ${result.anchor || "the indexed neurons"}. Plan: ${steps} Structured query: ${result.structured_query.replaceAll("\n", " ")} Results: ${summary}`;
+  if (!rows.length) {
+    return `I did not find neurons matching all of those constraints near ${result.anchor || "the anchor neuron"} in the current multimodal index.`;
+  }
+
+  const topNames = rows.map((item) => item.neuron_id).join(", ");
+  const evidence = rows
+    .map((item) => {
+      const parts = [`${item.neuron_id}`];
+      if (Number.isFinite(Number(item.connection_weight))) parts.push(`connection weight ${Number(item.connection_weight).toFixed(1)}`);
+      if (item.distance !== null && item.distance !== undefined) parts.push(`${Number(item.distance).toFixed(2)} spatial units away`);
+      if (item.shared_lineage_depth) parts.push(`shared lineage depth ${item.shared_lineage_depth}`);
+      return parts.join(": ");
+    })
+    .join("; ");
+
+  return `${topNames} match this query best. ${evidence}.`;
 }
 
 function formatMultimodalChatAnswer(result) {
