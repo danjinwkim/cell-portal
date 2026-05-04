@@ -119,16 +119,23 @@ The Global Clustering view posts the already-loaded browser expression view to `
 The backend module `multimodal_store.py` defines the unified schema:
 
 ```text
-neuron_id
-cluster
-transcriptomic_neighbors
-connectome_edges: [{target, chemical_weight, gap_weight}]
-spatial_coordinates: {x, y, z}
-lineage_path
-parent_cell
+Neuron {
+  id: string
+  type: string
+  coordinates: {x, y, z}
+  lineage: {parent, lineage_depth, lineage_root, lineage_path}
+  connections: [{target, type: chemical|gap_junction, weight}]
+}
 ```
 
-Optional ingestion files can be added under `multimodal_data/`:
+`multimodal_ingest.py` is the reproducible ingestion layer. It separates:
+
+- data retrieval: fetches OpenWorm CElegansNeuroML files, OpenWorm/ConnectomeToolbox references, WormAtlas wiring/lineage-linked files when discoverable, and Figshare lineage landing pages/files when reachable.
+- normalization: standardizes neuron IDs, parses CSV/TSV/JSON/MAT/Excel/GML-like graph resources where supported, maps chemical synapses and gap junctions into a common edge table, and stores coordinates/lineage with missing values left as `null`/empty fields.
+- storage: writes `multimodal_data/unified_neurons.json` as a graph-like JSON index with neurons as nodes, synapses as edges, and lineage ancestry attached to each node.
+- query reasoning: `/api/multimodal/query-plan` identifies modalities, emits a Cypher-style structured query, records reasoning steps, and returns ranked results.
+
+Optional local curation files can also be added under `multimodal_data/`:
 
 - `neurons.csv`: `neuron_id,neuron_class,cluster`
 - `connectome_edges.csv`: `source,target,chemical_weight,gap_weight`
@@ -143,8 +150,19 @@ If those files are absent, the app uses a small built-in adult neuron demo index
 - `GET /api/multimodal/spatial/nearest/{neuron_id}`
 - `GET /api/multimodal/lineage/{neuron_id}`
 - `POST /api/multimodal/query`
+- `GET /api/multimodal/dataset`
+- `POST /api/multimodal/rebuild`
+- `POST /api/multimodal/query-plan`
 
 The natural-language query engine is intentionally deterministic in this prototype: it extracts neuron IDs and maps terms such as `synaptic`, `connected`, `near`, `lineage`, and `transcriptionally similar` to the structured endpoints above. This can later be replaced by LLM function calling while preserving the same API tools.
+
+Example query-plan request:
+
+```bash
+curl -X POST http://localhost:8000/api/multimodal/query-plan \
+  -H 'content-type: application/json' \
+  -d '{"query":"Which neurons near AVAL share a lineage ancestor and are strongly connected?"}'
+```
 
 The main "Ask the dataset" chat uses a general intent planner rather than a one-question/one-template chain. It extracts entities, candidate modalities, operations, limits, clusters, and ambiguity; then routes to transcriptomic, WormBase, or multimodal tools. When several interpretations are plausible, the answer states that ambiguity before executing the best-supported query.
 

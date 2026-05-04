@@ -834,15 +834,16 @@ function highlightGlobalCluster(clusterId) {
 }
 
 async function loadMultimodalIndex() {
-  if (!$("multimodalSummary")) return;
   try {
     const response = await fetch(apiUrl("/api/multimodal/neurons"));
     if (!response.ok) throw new Error("Multimodal API unavailable");
     state.multimodalNeurons = await response.json();
-    renderMultimodalViews(state.multimodalNeurons.slice(0, 6).map((item) => item.neuron_id));
-    $("multimodalSummary").textContent = `${state.multimodalNeurons.length} multimodal neuron records indexed`;
+    if ($("multimodalSummary")) {
+      renderMultimodalViews(state.multimodalNeurons.slice(0, 6).map((item) => item.neuron_id));
+      $("multimodalSummary").textContent = `${state.multimodalNeurons.length} multimodal neuron records indexed`;
+    }
   } catch (error) {
-    $("multimodalSummary").textContent = `Multimodal index unavailable: ${error.message}`;
+    if ($("multimodalSummary")) $("multimodalSummary").textContent = `Multimodal index unavailable: ${error.message}`;
   }
 }
 
@@ -1194,7 +1195,6 @@ async function executeQueryIntent(intent, message) {
 }
 
 function shouldUseMultimodalEngine(intent) {
-  if (!$("multimodalSummary")) return false;
   const names = intent.modalities.map((item) => item.name);
   return names.includes("multimodal") || names.includes("connectome") || names.includes("spatial") || names.includes("lineage");
 }
@@ -1228,19 +1228,45 @@ function extractNeuronEntities(message) {
 }
 
 async function answerMultimodalQuestion(message) {
-  if (!$("multimodalSummary")) {
-    return "Multimodal querying is temporarily hidden in this version. I can still answer questions about the loaded transcriptomic dataset.";
-  }
   try {
-    const result = await executeMultimodalQuery(message);
-    $("multimodalSummary").textContent = `${result.kind.replaceAll("_", " ")}: ${result.highlighted_neurons.length} highlighted neurons`;
-    renderMultimodalResults(result);
-    renderMultimodalViews(result.highlighted_neurons);
+    const result = await executeMultimodalQueryPlan(message);
+    const highlighted = result.results.map((item) => item.neuron_id);
+    state.multimodalHighlightIds = new Set(highlighted.map(normalizeNeuronId));
+    if ($("multimodalSummary")) {
+      $("multimodalSummary").textContent = `${result.modalities.join(" + ") || "metadata"}: ${highlighted.length} results`;
+      renderMultimodalResults({ kind: "query_plan", result: result.results, highlighted_neurons: highlighted });
+      renderMultimodalViews(highlighted);
+    }
     schedulePlotRender();
-    return formatMultimodalChatAnswer(result);
+    return formatQueryPlanAnswer(result);
   } catch (error) {
     return `I could not run the multimodal query right now. Details: ${error.message}`;
   }
+}
+
+async function executeMultimodalQueryPlan(query) {
+  const response = await fetch(apiUrl("/api/multimodal/query-plan"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || "Multimodal query planner failed");
+  }
+  return response.json();
+}
+
+function formatQueryPlanAnswer(result) {
+  const modalities = result.modalities.length ? result.modalities.join(", ") : "metadata";
+  const steps = result.query_plan.map((step, index) => `${index + 1}. ${step}`).join(" ");
+  const rows = result.results.slice(0, 5);
+  const summary = rows.length
+    ? rows
+        .map((item) => `${item.neuron_id}: weight ${Number(item.connection_weight || 0).toFixed(1)}, distance ${item.distance ?? "NA"}, shared lineage depth ${item.shared_lineage_depth}`)
+        .join("; ")
+    : "No matching neurons were found with the current indexed data.";
+  return `I interpreted this as a ${modalities} query anchored on ${result.anchor || "the indexed neurons"}. Plan: ${steps} Structured query: ${result.structured_query.replaceAll("\n", " ")} Results: ${summary}`;
 }
 
 function formatMultimodalChatAnswer(result) {
@@ -1553,4 +1579,4 @@ function makeExampleDataset() {
 
 schedulePlotRender();
 refreshServerDatasets();
-if ($("multimodalSummary")) loadMultimodalIndex();
+loadMultimodalIndex();

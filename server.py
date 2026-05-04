@@ -21,6 +21,7 @@ from scipy.cluster.hierarchy import dendrogram, fcluster, linkage
 from scipy.spatial.distance import squareform
 from scipy import sparse
 
+from multimodal_ingest import build_unified_dataset, query_unified_dataset
 from multimodal_store import STORE
 
 
@@ -164,6 +165,18 @@ async def multimodal_neurons() -> list[dict[str, Any]]:
     return STORE.all_neurons()
 
 
+@app.get("/api/multimodal/dataset")
+async def multimodal_dataset() -> dict[str, Any]:
+    return STORE.unified_dataset()
+
+
+@app.post("/api/multimodal/rebuild")
+async def multimodal_rebuild() -> dict[str, Any]:
+    payload = build_unified_dataset(STORE.data_dir)
+    STORE.load()
+    return payload
+
+
 @app.get("/api/multimodal/neuron/{neuron_id}")
 async def multimodal_neuron(neuron_id: str) -> dict[str, Any]:
     record = STORE.get_neuron(neuron_id)
@@ -193,6 +206,14 @@ async def multimodal_query(payload: dict[str, Any]) -> dict[str, Any]:
     if not query.strip():
         raise HTTPException(status_code=400, detail="Query text is required.")
     return STORE.natural_language_query(query)
+
+
+@app.post("/api/multimodal/query-plan")
+async def multimodal_query_plan(payload: dict[str, Any]) -> dict[str, Any]:
+    query = str(payload.get("query") or "")
+    if not query.strip():
+        raise HTTPException(status_code=400, detail="Query text is required.")
+    return query_unified_dataset(STORE.unified_dataset(), query)
 
 
 @app.post("/api/global-clustering")

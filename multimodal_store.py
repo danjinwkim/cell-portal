@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import os
 import json
 import math
 import re
@@ -9,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-DATA_DIR = Path(__file__).parent / "multimodal_data"
+DEFAULT_DATA_DIR = Path("/tmp/cell_portal_multimodal") if os.environ.get("VERCEL") else Path(__file__).parent / "multimodal_data"
+DATA_DIR = Path(os.environ.get("MULTIMODAL_DATA_DIR", DEFAULT_DATA_DIR))
 
 
 @dataclass
@@ -39,20 +41,83 @@ class MultimodalStore:
 
     def load(self) -> None:
         self.neurons = demo_neurons()
+        self.load_unified_json()
         self.load_neuron_metadata()
         self.load_connectome_edges()
         self.load_spatial_coordinates()
         self.load_lineage()
 
+    def load_unified_json(self) -> None:
+        path = self.data_dir / "unified_neurons.json"
+        if not path.exists():
+            return
+        try:
+            payload = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            return
+        for row in payload.get("neurons", []):
+            record = self.ensure(row.get("id", ""))
+            record.neuron_class = row.get("type") or record.neuron_class
+            coords = row.get("coordinates") or {}
+            if coords.get("x") is not None:
+                record.spatial_coordinates = {axis: float(coords.get(axis) or 0) for axis in ("x", "y", "z")}
+            lineage = row.get("lineage") or {}
+            record.parent_cell = lineage.get("parent") or record.parent_cell
+            record.lineage_path = lineage.get("lineage_path") or record.lineage_path
+            for edge in row.get("connections", []):
+                target = normalize_id(edge.get("target"))
+                if not target:
+                    continue
+                self.ensure(target)
+                if edge.get("type") == "gap_junction":
+                    record.connectome_edges.append(ConnectomeEdge(target, gap_weight=float(edge.get("weight") or 0)))
+                else:
+                    record.connectome_edges.append(ConnectomeEdge(target, chemical_weight=float(edge.get("weight") or 0)))
+
     def all_neurons(self) -> list[dict[str, Any]]:
         return [serialize_neuron(record) for record in sorted(self.neurons.values(), key=lambda item: item.neuron_id)]
 
+    def unified_dataset(self) -> dict[str, Any]:
+        neurons = []
+        for record in sorted(self.neurons.values(), key=lambda item: item.neuron_id):
+            lineage_path = record.lineage_path or []
+            connections = []
+            for edge in record.connectome_edges:
+                if edge.chemical_weight:
+                    connections.append({"target": edge.target, "type": "chemical", "weight": edge.chemical_weight})
+                if edge.gap_weight:
+                    connections.append({"target": edge.target, "type": "gap_junction", "weight": edge.gap_weight})
+            neurons.append(
+                {
+                    "id": record.neuron_id,
+                    "type": record.neuron_class,
+                    "coordinates": {
+                        "x": record.spatial_coordinates.get("x"),
+                        "y": record.spatial_coordinates.get("y"),
+                        "z": record.spatial_coordinates.get("z"),
+                    },
+                    "lineage": {
+                        "parent": record.parent_cell,
+                        "lineage_depth": len(lineage_path),
+                        "lineage_root": lineage_path[0] if lineage_path else "",
+                        "lineage_path": lineage_path,
+                    },
+                    "connections": connections,
+                }
+            )
+        return {
+            "schema": "cell-portal-multimodal-v1",
+            "neuron_count": len(neurons),
+            "edge_count": sum(len(item["connections"]) for item in neurons),
+            "neurons": neurons,
+        }
+
     def get_neuron(self, neuron_id: str) -> dict[str, Any] | None:
-        record = self.neurons.get(normalize_id(neuron_id))
+        record = self.neurons.get(self.resolve_id(neuron_id))
         return serialize_neuron(record) if record else None
 
     def connectivity(self, neuron_id: str, min_weight: float = 0.0) -> dict[str, Any]:
-        record = self.neurons.get(normalize_id(neuron_id))
+        record = self.neurons.get(self.resolve_id(neuron_id))
         if not record:
             return {"neuron_id": neuron_id, "neighbors": [], "degree": 0, "weighted_degree": 0}
         neighbors = [
@@ -73,7 +138,7 @@ class MultimodalStore:
         }
 
     def nearest(self, neuron_id: str, limit: int = 8) -> dict[str, Any]:
-        source = self.neurons.get(normalize_id(neuron_id))
+        source = self.neurons.get(self.resolve_id(neuron_id))
         if not source or not source.spatial_coordinates:
             return {"neuron_id": neuron_id, "neighbors": []}
         distances = []
@@ -90,7 +155,7 @@ class MultimodalStore:
         return {"neuron_id": source.neuron_id, "neighbors": sorted(distances, key=lambda item: item["distance"])[:limit]}
 
     def lineage(self, neuron_id: str) -> dict[str, Any]:
-        record = self.neurons.get(normalize_id(neuron_id))
+        record = self.neurons.get(self.resolve_id(neuron_id))
         if not record:
             return {"neuron_id": neuron_id, "ancestors": [], "descendants": [], "similar_lineage": []}
         prefix = record.lineage_path[: max(1, len(record.lineage_path) - 1)]
@@ -111,7 +176,7 @@ class MultimodalStore:
     def natural_language_query(self, text: str) -> dict[str, Any]:
         query = text.lower()
         entities = [name for name in self.neurons if re.search(rf"\b{re.escape(name.lower())}\b", query)]
-        anchor = entities[0] if entities else infer_anchor(query)
+        anchor = self.resolve_id(entities[0] if entities else infer_anchor(query))
         if "transcription" in query and ("connected" in query or "synap" in query):
             rows = self.transcriptionally_similar_and_connected()
             highlighted = sorted({item["source"] for item in rows} | {item["target"] for item in rows})
@@ -212,6 +277,14 @@ class MultimodalStore:
         if normalized not in self.neurons:
             self.neurons[normalized] = NeuronRecord(normalized)
         return self.neurons[normalized]
+
+    def resolve_id(self, neuron_id: str | None) -> str:
+        normalized = normalize_id(neuron_id)
+        if normalized in self.neurons:
+            return normalized
+        if normalized.endswith(("L", "R")) and normalized[:-1] in self.neurons:
+            return normalized[:-1]
+        return normalized
 
 
 def response(kind: str, result: Any, highlighted: list[str]) -> dict[str, Any]:
