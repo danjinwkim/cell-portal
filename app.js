@@ -22,6 +22,8 @@ const state = {
 
 const palette = ["#1f7a8c", "#d88742", "#ba4a68", "#4d8d62", "#7353ba", "#247ba0", "#c44536", "#5b8e7d"];
 const numericThreshold = 0.9;
+const maxGlobalClusterCells = 350;
+const maxGlobalClusterGenes = 120;
 const globalClusterCache = new Map();
 
 const $ = (id) => document.getElementById(id);
@@ -620,7 +622,7 @@ async function runGlobalClustering(force = true) {
     return;
   }
 
-  status.textContent = `Computing ${payload.metric} similarity for ${payload.rows.length} profiles`;
+  status.textContent = `Computing ${payload.metric} similarity for ${payload.matrix.length} profiles and ${payload.genes.length} informative genes`;
   controls.runGlobalClustering.disabled = true;
   try {
     const response = await fetch("/api/global-clustering", {
@@ -643,25 +645,41 @@ async function runGlobalClustering(force = true) {
 }
 
 function globalClusteringPayload() {
-  const limit = Math.min(state.rows.length, 500);
+  const limit = Math.min(state.rows.length, maxGlobalClusterCells);
   const rows = state.rows.slice(0, limit);
   const metric = controls.globalMetric.value || "pearson";
   const method = controls.globalLinkage.value || "average";
-  const matrix = rows.map((row) => state.genes.map((gene) => Number(row[gene]) || 0));
+  const genes = selectGlobalClusteringGenes(rows);
+  const matrix = rows.map((row) => genes.map((gene) => Number(row[gene]) || 0));
   return {
     metric,
     method,
     matrix,
-    genes: state.genes,
+    genes,
     labels: rows.map(cellLabel),
     classes: rows.map(cellTypeLabel),
-    cacheKey: stableGlobalCacheKey(rows, metric, method),
+    cacheKey: stableGlobalCacheKey(rows, genes, metric, method),
   };
 }
 
-function stableGlobalCacheKey(rows, metric, method) {
-  const total = rows.reduce((sum, row) => sum + state.genes.reduce((geneSum, gene) => geneSum + (Number(row[gene]) || 0), 0), 0);
-  return [state.fileName, rows.length, state.genes.length, metric, method, total.toFixed(3)].join("|");
+function selectGlobalClusteringGenes(rows) {
+  if (state.genes.length <= maxGlobalClusterGenes) return state.genes;
+  return state.genes
+    .map((gene) => {
+      const values = rows.map((row) => Number(row[gene]) || 0);
+      const avg = mean(values);
+      const variance = mean(values.map((value) => (value - avg) ** 2));
+      const detected = values.filter((value) => value > 0).length / Math.max(1, values.length);
+      return { gene, score: variance * (0.25 + detected) };
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, maxGlobalClusterGenes)
+    .map((item) => item.gene);
+}
+
+function stableGlobalCacheKey(rows, genes, metric, method) {
+  const total = rows.reduce((sum, row) => sum + genes.reduce((geneSum, gene) => geneSum + (Number(row[gene]) || 0), 0), 0);
+  return [state.fileName, rows.length, genes.length, metric, method, total.toFixed(3), genes.slice(0, 8).join(",")].join("|");
 }
 
 function renderGlobalClustering() {
