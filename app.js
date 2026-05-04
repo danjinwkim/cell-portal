@@ -84,10 +84,12 @@ controls.globalTab.addEventListener("click", () => setActiveView("global"));
 controls.globalMetric.addEventListener("change", runGlobalClustering);
 controls.globalLinkage.addEventListener("change", runGlobalClustering);
 controls.runGlobalClustering.addEventListener("click", runGlobalClustering);
-controls.multimodalForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  await runMultimodalQuery(controls.multimodalInput.value.trim());
-});
+if (controls.multimodalForm) {
+  controls.multimodalForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    await runMultimodalQuery(controls.multimodalInput.value.trim());
+  });
+}
 
 controls.chatForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -685,10 +687,9 @@ function stableGlobalCacheKey(rows, genes, metric, method) {
 function renderGlobalClustering() {
   const result = state.globalClustering;
   if (!result) return;
-  $("globalStatus").textContent = `${result.summary.cells} profiles, ${result.summary.genes} genes, ${result.summary.clusterCount} blocks`;
+  $("globalStatus").textContent = `${result.summary.cells} profiles, ${result.summary.genes} genes, ${result.summary.clusterCount} groups`;
   renderDendrogram(result);
   renderSimilarityHeatmap(result);
-  renderClusterBlocks(result);
 }
 
 function renderDendrogram(result) {
@@ -789,6 +790,7 @@ function globalBlockShapes(result) {
 
 function renderClusterBlocks(result) {
   const container = $("clusterBlocks");
+  if (!container) return;
   container.innerHTML = "";
   result.blocks.forEach((block, index) => {
     const button = document.createElement("button");
@@ -810,6 +812,7 @@ function highlightGlobalCluster(clusterId) {
 }
 
 async function loadMultimodalIndex() {
+  if (!$("multimodalSummary")) return;
   try {
     const response = await fetch("/api/multimodal/neurons");
     if (!response.ok) throw new Error("Multimodal API unavailable");
@@ -822,6 +825,7 @@ async function loadMultimodalIndex() {
 }
 
 async function runMultimodalQuery(query) {
+  if (!$("multimodalSummary")) return;
   if (!query) return;
   $("multimodalSummary").textContent = "Running multimodal query";
   try {
@@ -1168,6 +1172,7 @@ async function executeQueryIntent(intent, message) {
 }
 
 function shouldUseMultimodalEngine(intent) {
+  if (!$("multimodalSummary")) return false;
   const names = intent.modalities.map((item) => item.name);
   return names.includes("multimodal") || names.includes("connectome") || names.includes("spatial") || names.includes("lineage");
 }
@@ -1201,6 +1206,9 @@ function extractNeuronEntities(message) {
 }
 
 async function answerMultimodalQuestion(message) {
+  if (!$("multimodalSummary")) {
+    return "Multimodal querying is temporarily hidden in this version. I can still answer questions about the loaded transcriptomic dataset.";
+  }
   try {
     const result = await executeMultimodalQuery(message);
     $("multimodalSummary").textContent = `${result.kind.replaceAll("_", " ")}: ${result.highlighted_neurons.length} highlighted neurons`;
@@ -1523,4 +1531,4 @@ function makeExampleDataset() {
 
 schedulePlotRender();
 refreshServerDatasets();
-loadMultimodalIndex();
+if ($("multimodalSummary")) loadMultimodalIndex();

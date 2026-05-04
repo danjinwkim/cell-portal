@@ -62,7 +62,7 @@
             <h2 id="homeTitle">C. elegans Single-Cell RNA-seq Cell Portal</h2>
             <p>
               Explore uploaded CSV, TSV, and H5AD datasets with interactive PCA, global clustering,
-              marker discovery, multimodal neuron context, and natural-language dataset queries.
+              marker discovery, differential expression, and natural-language dataset queries.
             </p>
           </div>
           <a class="launch-btn" href="#datasetFile">Launch explorer</a>
@@ -151,10 +151,6 @@
                   <div id="dendrogramPlot" class="dendrogram-surface" role="img" aria-label="Hierarchical clustering dendrogram"></div>
                   <div id="globalHeatmap" class="heatmap-surface" role="img" aria-label="Pairwise transcriptomic similarity heatmap"></div>
                 </div>
-                <aside class="cluster-panel">
-                  <p class="eyebrow">Cluster blocks</p>
-                  <div id="clusterBlocks" class="cluster-blocks"></div>
-                </aside>
               </div>
             </section>
           </article>
@@ -171,7 +167,7 @@
               <input
                 id="chatInput"
                 type="text"
-                placeholder="Try: describe daf-2, which cells express CD3D, or show neurons near AVA"
+                placeholder="Try: describe daf-2, which cells express CD3D, or compare two clusters"
                 autocomplete="off"
               />
               <button type="submit" class="primary-btn">Ask</button>
@@ -180,31 +176,6 @@
         </section>
 
         <section class="tables-grid">
-          <article class="panel multimodal-panel">
-            <div class="section-header">
-              <div>
-                <p class="eyebrow">Multimodal query</p>
-                <h3>Transcriptomics + connectome + anatomy + lineage</h3>
-              </div>
-            </div>
-            <form id="multimodalForm" class="multimodal-form">
-              <input
-                id="multimodalInput"
-                type="text"
-                placeholder="Try: Show neurons near AVA with strong synaptic connections"
-                autocomplete="off"
-              />
-              <button class="primary-btn" type="submit">Search</button>
-            </form>
-            <div id="multimodalSummary" class="status-inline">Indexed multimodal neuron demo is ready.</div>
-            <div class="multimodal-grid">
-              <div id="connectomeGraph" class="mini-plot" role="img" aria-label="Connectome graph"></div>
-              <div id="spatialMap" class="mini-plot" role="img" aria-label="Spatial neuron map"></div>
-              <div id="lineageTree" class="mini-plot" role="img" aria-label="Lineage tree"></div>
-            </div>
-            <div id="multimodalResults" class="result-list"></div>
-          </article>
-
           <article class="panel">
             <div class="section-header">
               <div>
@@ -258,6 +229,6 @@
     </main>
 
     <script src="vendor/plotly-2.35.2.min.js"></script>
-    <script src="app.js?v=17"></script>
+    <script src="app.js?v=18"></script>
   </body>
 </html>

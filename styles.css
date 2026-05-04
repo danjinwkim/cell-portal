@@ -332,7 +332,7 @@ input[type="text"] {
 .plotly-surface,
 .heatmap-surface {
   width: 100%;
-  min-height: 430px;
+  min-height: 560px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfc;
@@ -340,7 +340,7 @@ input[type="text"] {
 
 .dendrogram-surface {
   width: 100%;
-  min-height: 190px;
+  min-height: 220px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: #fbfcfc;
@@ -430,7 +430,7 @@ input[type="text"] {
 
 .global-grid {
   display: grid;
-  grid-template-columns: minmax(420px, 1fr) minmax(190px, 260px);
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   min-width: 0;
 }
@@ -439,49 +439,6 @@ input[type="text"] {
   display: grid;
   gap: 8px;
   min-width: 0;
-}
-
-.cluster-panel {
-  display: grid;
-  align-content: start;
-  gap: 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #f8fbfb;
-  padding: 12px;
-}
-
-.cluster-blocks {
-  display: grid;
-  gap: 8px;
-}
-
-.cluster-chip {
-  display: grid;
-  grid-template-columns: 12px 1fr;
-  gap: 8px;
-  align-items: center;
-  width: 100%;
-  min-height: 38px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: white;
-  color: var(--ink);
-  cursor: pointer;
-  padding: 7px 8px;
-  text-align: left;
-}
-
-.cluster-chip i {
-  display: block;
-  width: 12px;
-  height: 24px;
-  border-radius: 3px;
-}
-
-.cluster-chip span {
-  color: var(--muted);
-  font-size: 0.76rem;
 }
 
 .chat-panel {
