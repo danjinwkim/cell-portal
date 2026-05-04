@@ -611,7 +611,7 @@ async function runGlobalClustering(force = true) {
   }
 
   const payload = globalClusteringPayload();
-  if (payload.rows.length < 2) {
+  if (payload.matrix.length < 2) {
     status.textContent = "Need at least two cells";
     return;
   }
